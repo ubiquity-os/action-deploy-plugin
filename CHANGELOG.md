@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.2](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.1.1...v1.1.2) (2024-10-15)
+
+
+### Bug Fixes
+
+* **action:** refactor manifest update to use async/await ([90e7386](https://github.com/ubiquity-os/action-deploy-plugin/commit/90e7386d82f05a6f3f6575ca862a76507fefd352))
+* handle ESM and CJS module loading in action script ([33147cc](https://github.com/ubiquity-os/action-deploy-plugin/commit/33147cc8721f94c42a1ecb3834217a61cbf75f3a))
+* rename output file to use .cjs extension ([4860686](https://github.com/ubiquity-os/action-deploy-plugin/commit/4860686466a97f6d514fa6d88714ca22586c0d07))
+* replace async file operations with sync methods ([8e99285](https://github.com/ubiquity-os/action-deploy-plugin/commit/8e992851f2586567bf2180ae5f5a59f3266b8dc2))
+* update schema and plugin path extensions, remove ts compilation ([086a914](https://github.com/ubiquity-os/action-deploy-plugin/commit/086a9147e9b8ca942e8467ee6a02a1ab52a4cf8f))
+* update schema and plugin path extensions, remove ts compilation ([6c4202b](https://github.com/ubiquity-os/action-deploy-plugin/commit/6c4202beb4cf0adce32ae8732b2566e5444648a2))
+
 ## [1.1.1](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.1.0...v1.1.1) (2024-10-15)
 
 
