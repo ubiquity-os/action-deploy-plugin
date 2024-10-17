@@ -134,39 +134,93 @@ runs:
         app_id: ${{ env.APP_ID }}
         private_key: ${{ env.APP_PRIVATE_KEY }}
 
-    - name: Commit and Push changes
+    - name: Install dependencies for GitHub Auth
+      shell: bash
+      run: |
+        yarn add "@actions/github"
+
+    - name: Update manifest.json and dist folder
       shell: bash
       env:
         GITHUB_TOKEN: ${{ steps.get_installation_token.outputs.token || github.token }}
       run: |
-        app_token="${{ steps.get_installation_token.outputs.token }}" # Assuming this outputs your app token
-        
-        user_info=$(curl -s -H "Authorization: token $app_token" https://api.github.com/user)
-        
-        user_name=$(echo "$user_info" | jq -r .name)
-        user_email=$(echo "$user_info" | jq -r .email)
-        
-        if [ "$user_email" == "null" ]; then
-          user_email="ubiquity-os[bot]@users.noreply.github.com"
-          user_name="ubiquity-os[bot]"
-        fi
-        
-        # Configure Git with the retrieved user information
-        git config --global user.name "$user_name"
-        git config --global user.email "$user_email"
-        git remote set-url origin https://${{ env.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
-        
         git add "${{ inputs.manifestPath }}"
         git add -f ${{ github.workspace }}/dist/\*
+        echo "Changed files:"
+        echo "$(git diff-index --cached --name-only HEAD)"
         if [ -n "$(git diff-index --cached --name-only HEAD)" ]; then
-          git commit -m "${{ inputs.commitMessage }}" || echo "Commit failed"
-          # Attempt to pull and resolve conflicts
-          git pull origin ${{ github.ref_name }} || {
-            echo "Rebase failed, force pushing changes."
-            git push --force origin HEAD:${{ github.ref_name }}
-            exit 0
-          }
-          git push origin HEAD:${{ github.ref_name }}
+          node -e "
+            const fs = require('fs');
+            const path = require('path');
+            const github = require('@actions/github');
+            const manifestPath = path.relative('.', '${{ inputs.manifestPath }}');
+
+            async function pushChanges() {
+              const octokit = github.getOctokit(process.env.GITHUB_TOKEN);
+
+              const context = github.context;
+              const owner = context.repo.owner;
+              const repo = context.repo.repo;
+              const ref = 'heads/${{ github.ref_name }}';
+
+              try {
+                const currentCommit = await octokit.rest.git.getRef({
+                  owner,
+                  repo,
+                  ref
+                });
+
+                const newTree = await octokit.rest.git.createTree({
+                  owner,
+                  repo,
+                  base_tree: currentCommit.data.object.sha,
+                  tree: [
+                    {
+                      path: manifestPath,
+                      mode: '100644',
+                      type: 'blob',
+                      content: fs.readFileSync(manifestPath, 'utf8'),
+                    },
+                    ...fs.readdirSync('${{ github.workspace }}/dist').map((file) => {
+                        const relativePath = path.relative('.', '${{ github.workspace }}/dist/' + file);
+                        return {
+                          path: relativePath,
+                          mode: '100644',
+                          type: 'blob',
+                          content: fs.readFileSync(
+                          '${{ github.workspace }}/dist/' + file,
+                          'utf-8',
+                        ),
+                      };
+                    }),
+                  ],
+                });
+
+                const newCommit = await octokit.rest.git.createCommit({
+                  owner,
+                  repo,
+                  message: '${{ inputs.commitMessage }}',
+                  tree: newTree.data.sha,
+                  parents: [currentCommit.data.object.sha]
+                });
+
+                await octokit.rest.git.updateRef({
+                  owner,
+                  repo,
+                  ref,
+                  sha: newCommit.data.sha,
+                  force: true
+                });
+
+                console.log('Changes pushed successfully');
+              } catch (error) {
+                console.error('Error pushing changes:', error);
+                process.exit(1);
+              }
+            }
+
+            pushChanges();
+          "
         else
           echo "No changes to commit"
         fi
