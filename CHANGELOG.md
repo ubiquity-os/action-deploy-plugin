@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.4](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.1.3...v1.1.4) (2024-11-17)
+
+
+### Bug Fixes
+
+* test installation with bun ([a171649](https://github.com/ubiquity-os/action-deploy-plugin/commit/a171649c239faa695fe53274266b12c5aba12e3a))
+* test installation with bun ([40e4ce1](https://github.com/ubiquity-os/action-deploy-plugin/commit/40e4ce145f5aa1753252b116a68d984dfeb32b97))
+* update action.yml ([e78f69e](https://github.com/ubiquity-os/action-deploy-plugin/commit/e78f69e408cdd0ead7963e3a9e3cf1789ceec6d5))
+
 ## [1.1.3](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.1.2...v1.1.3) (2024-11-07)
 
 
