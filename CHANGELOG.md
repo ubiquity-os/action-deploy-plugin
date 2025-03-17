@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.1.4](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.1.3...v1.1.4) (2025-01-06)
+
+
+### Bug Fixes
+
+* added cjs to included files ([3b105ab](https://github.com/ubiquity-os/action-deploy-plugin/commit/3b105ab7a49cdf4a1c0da05bec5aa8607ce81ccb))
+* added cjs to included files ([3a9b61a](https://github.com/ubiquity-os/action-deploy-plugin/commit/3a9b61a34ca9b9c363eb625f2ca9694481b806ab))
+* test installation with bun ([a171649](https://github.com/ubiquity-os/action-deploy-plugin/commit/a171649c239faa695fe53274266b12c5aba12e3a))
+* test installation with bun ([40e4ce1](https://github.com/ubiquity-os/action-deploy-plugin/commit/40e4ce145f5aa1753252b116a68d984dfeb32b97))
+* update action.yml ([e78f69e](https://github.com/ubiquity-os/action-deploy-plugin/commit/e78f69e408cdd0ead7963e3a9e3cf1789ceec6d5))
+
 ## [1.1.3](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.1.2...v1.1.3) (2024-11-07)
 
 
