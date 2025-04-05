@@ -149,7 +149,6 @@ runs:
       with:
         app-id: ${{ env.APP_ID }}
         private-key: ${{ env.APP_PRIVATE_KEY }}
-        owner: ${{ github.repository_owner }}
 
     - name: Stage Changes
       shell: bash
