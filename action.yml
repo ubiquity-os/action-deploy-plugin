@@ -151,19 +151,15 @@ runs:
         private-key: ${{ env.APP_PRIVATE_KEY }}
 
     - name: Stage Changes
+      id: stage_changes
       shell: bash
       run: |
         git add "${{ inputs.manifestPath }}"
         find ${{ github.workspace }}/dist \( -name "*.js" -o -name "*.cjs" -o -name "*.map" -o -name "*.json" \) -print0 | xargs -0 git add -f
-
-    - name: Check for staged changes
-      id: check_changes
-      shell: bash
-      run: |
         git diff --cached --quiet || echo "staged=true" >> $GITHUB_OUTPUT
 
     - name: Update manifest.json and dist folder
-      if: steps.check_changes.outputs.staged == 'true'
+      if: steps.stage_changes.outputs.staged == 'true'
       uses: dsanders11/github-app-commit-action@v1.5.0
       with:
         message: ${{ inputs.commitMessage }}
