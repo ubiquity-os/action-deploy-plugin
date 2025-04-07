@@ -67,18 +67,17 @@ async function pushChanges() {
         // Optionally, exit early: process.exit(1);
       }
 
-      const fileContent = fs.readFileSync(file, 'utf8'); // Read as utf8 for blob creation
+      // Read file as buffer and encode to Base64
+      const fileBuffer = fs.readFileSync(file);
+      const fileContentBase64 = fileBuffer.toString('base64');
 
-      // Create the blob using octokit.request
-      console.log(`Creating blob for ${relativePath}...`);
+      // Create the blob using octokit.request with Base64 encoding
+      console.log(`Creating Base64 blob for ${relativePath}...`);
       const blob = await octokit.request('POST /repos/{owner}/{repo}/git/blobs', {
         owner: owner,
         repo: repo,
-        content: fileContent,
-        encoding: 'utf-8',
-        headers: {
-          'X-GitHub-Api-Version': '2022-11-28'
-        }
+        content: fileContentBase64, // Use Base64 content
+        encoding: 'base64',       // Specify Base64 encoding
       });
       console.log(`Blob created for ${relativePath} with SHA: ${blob.data.sha}`);
 
