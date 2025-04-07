@@ -2,6 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const github = require('@actions/github');
 const glob = require('glob');
+const { execSync } = require('child_process'); // Added
+const crypto = require('crypto'); // Added
 
 // Read inputs from environment variables
 const manifestPathInput = process.env.MANIFEST_PATH;
@@ -15,7 +17,52 @@ if (!manifestPathInput || !commitMessage || !githubToken || !githubWorkspace || 
   process.exit(1);
 }
 
-const manifestPath = path.relative(githubWorkspace, manifestPathInput); // Make relative to workspace for git
+// Function to create a blob for a file, handling large files appropriately
+async function createBlobForFile(octokit, owner, repo, filepath) {
+  const fileSize = fs.statSync(filepath).size;
+  const fileContent = fs.readFileSync(filepath); // Read content regardless for API path
+
+  // For smaller files (using 1MB threshold), use the GitHub API directly
+  if (fileSize < 1000000) { // Using 1MB threshold
+    console.log(`File ${path.basename(filepath)} (${fileSize} bytes) - using API`);
+    // Use octokit.request for consistency with original script's blob creation method
+    return await octokit.request('POST /repos/{owner}/{repo}/git/blobs', {
+        owner: owner,
+        repo: repo,
+        content: fileContent.toString('base64'),
+        encoding: 'base64'
+      });
+  }
+
+  // For larger files, use git hash-object locally
+  console.log(`File ${path.basename(filepath)} (${fileSize} bytes) - using Git CLI fallback`);
+
+  // Create a temporary directory for the large files if it doesn't exist
+  // Assuming script runs in workspace root where .git exists
+  const tempDir = path.join(githubWorkspace, '.git-temp');
+  if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir);
+  }
+
+  // Create a unique filename to avoid collisions using the absolute path
+  const hash = crypto.createHash('md5').update(filepath).digest('hex');
+  const tempFile = path.join(tempDir, hash);
+
+  // Copy the file to the temp location
+  fs.copyFileSync(filepath, tempFile);
+
+  // Get the blob hash using git hash-object and write object locally
+  // Ensure command runs in the workspace directory
+  const objectHash = execSync(`git hash-object -w "${tempFile}"`, { cwd: githubWorkspace }).toString().trim();
+
+  // Delete the temp file
+  fs.unlinkSync(tempFile);
+
+  // Return the SHA in the same format as the API response
+  console.log(`Local blob created for ${path.basename(filepath)} with SHA: ${objectHash}`);
+  return { data: { sha: objectHash } };
+}
+
 
 async function pushChanges() {
   const octokit = github.getOctokit(githubToken);
@@ -35,53 +82,31 @@ async function pushChanges() {
     console.log(`Current commit SHA: ${currentCommit.data.object.sha}`);
 
     const treeEntries = [];
+    const manifestFullPath = path.resolve(githubWorkspace, manifestPathInput); // Need full path for reading/hashing
+    const manifestRelativePath = path.relative(githubWorkspace, manifestFullPath); // Relative path for tree
 
-    // Add manifest.json using content
-    console.log('Processing file:', manifestPath);
-    const manifestFullPath = path.resolve(githubWorkspace, manifestPath); // Need full path for reading
-    const manifestContent = fs.readFileSync(manifestFullPath, 'utf8');
+    // Process manifest file using the helper function
+    console.log('Processing manifest file:', manifestRelativePath);
+    const manifestBlob = await createBlobForFile(octokit, owner, repo, manifestFullPath);
     treeEntries.push({
-      path: manifestPath, // Use relative path for tree
+      path: manifestRelativePath, // Use relative path for tree
       mode: '100644',
       type: 'blob',
-      content: manifestContent,
+      sha: manifestBlob.data.sha,
     });
+    console.log(`Added manifest blob with SHA: ${manifestBlob.data.sha}`);
 
-    // Process dist files: create blobs and add SHAs to tree
-    const distPath = path.join(githubWorkspace, 'dist/');
-    const distFiles = glob.sync(distPath + '**/*.{js,cjs,map,json}');
+
+    // Process dist files using the helper function
+    const distPath = path.join(githubWorkspace, 'dist/'); // Assuming dist is relative to workspace
+    const distFiles = glob.sync(distPath + '**/*.{js,cjs,map,json}'); // Use glob relative to CWD (workspace)
 
     console.log(`Processing ${distFiles.length} dist files...`);
-    for (const file of distFiles) {
-      const relativePath = path.relative(githubWorkspace, file); // Relative path for tree
-      // Get file size
-      const stats = fs.statSync(file); // Use full path for stat
-      const fileSizeInBytes = stats.size;
-      const fileSizeInMegabytes = fileSizeInBytes / (1024 * 1024);
+    for (const fileFullPath of distFiles) { // fileFullPath is absolute path from glob
+      const relativePath = path.relative(githubWorkspace, fileFullPath); // Relative path for tree
+      console.log(`Processing file: ${relativePath}`);
 
-      console.log(`Processing file: ${relativePath}, Size: ${fileSizeInMegabytes.toFixed(2)} MB`);
-
-      // Check if file exceeds 100MB limit
-      if (fileSizeInMegabytes > 100) {
-        console.error(`ERROR: File ${relativePath} exceeds the 100MB blob size limit.`);
-        // Optionally, exit early: process.exit(1);
-      }
-
-      // Read file as buffer and encode to Base64
-      const fileBuffer = fs.readFileSync(file);
-      const fileContentBase64 = fileBuffer.toString('base64');
-
-      // Create the blob using octokit.request with Base64 encoding
-      console.log(`Creating Base64 blob for ${relativePath}... (file content: ${fileContentBase64.length} characters)`);
-      const blob = await octokit.request('POST /repos/{owner}/{repo}/git/blobs', {
-        owner: owner,
-        repo: repo,
-        content: fileContentBase64, // Use Base64 content
-        encoding: 'base64',       // Specify Base64 encoding
-      });
-      console.log(`Blob created for ${relativePath} with SHA: ${blob.data.sha}`);
-
-      // Add blob SHA to the tree
+      const blob = await createBlobForFile(octokit, owner, repo, fileFullPath);
       treeEntries.push({
         path: relativePath, // Use relative path
         mode: '100644',
@@ -91,6 +116,7 @@ async function pushChanges() {
       console.log(`Added blob for ${relativePath} with SHA: ${blob.data.sha}`);
     }
 
+    // Create tree, commit, and update ref (same as before)
     console.log('Creating tree...');
     const newTree = await octokit.rest.git.createTree({
       owner,
@@ -119,7 +145,7 @@ async function pushChanges() {
       force: true // Force push like before
     });
 
-    console.log('Changes pushed successfully');
+    console.log('Changes committed via API successfully. Remember to git push separately if large files were processed locally.');
   } catch (error) {
     console.error('Error pushing changes:', error);
     process.exit(1);
