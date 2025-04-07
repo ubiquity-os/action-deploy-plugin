@@ -150,10 +150,14 @@ runs:
         app-id: ${{ env.APP_ID }}
         private-key: ${{ env.APP_PRIVATE_KEY }}
 
-    - name: Install dependencies for GitHub Auth
+    # Dependencies for the push script are now installed via the action's own package.json
+
+    - name: Install push script dependencies
       shell: bash
       run: |
-        bun add "@actions/github" glob
+        echo "Installing dependencies for the push script in ${{ github.action_path }}"
+        cd ${{ github.action_path }}
+        bun install
 
     - name: Update manifest.json and dist folder
       shell: bash
