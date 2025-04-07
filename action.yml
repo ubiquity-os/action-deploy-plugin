@@ -206,16 +206,31 @@ runs:
                 console.log(`Processing ${distFiles.length} dist files...`);
                 for (const file of distFiles) {
                   const relativePath = path.relative('.', file);
-                  console.log('Processing file:', relativePath);
+                  // Get file size
+                  const stats = fs.statSync(file);
+                  const fileSizeInBytes = stats.size;
+                  const fileSizeInMegabytes = fileSizeInBytes / (1024 * 1024);
+
+                  console.log(`Processing file: ${relativePath}, Size: ${fileSizeInMegabytes.toFixed(2)} MB`);
+
+                  // Check if file exceeds 100MB limit
+                  if (fileSizeInMegabytes > 100) {
+                    console.error(`ERROR: File ${relativePath} exceeds the 100MB blob size limit.`);
+                    // Optionally, exit early: process.exit(1);
+                    // For now, let it proceed to attempt blob creation to see the API error
+                  }
+
                   const fileContent = fs.readFileSync(file, 'utf8'); // Read as utf8 for blob creation
 
-                  console.log('Creating file blob');
-                  const blob = await octokit.rest.git.createBlob({
-                    owner,
-                    repo,
+                  // Create the blob using octokit.request
+                  console.log(`Creating blob for ${relativePath}...`);
+                  const blob = await octokit.request('POST /repos/{owner}/{repo}/git/blobs', {
+                    owner: owner,
+                    repo: repo,
                     content: fileContent,
-                    encoding: 'utf-8', // Specify encoding
+                    encoding: 'utf-8'
                   });
+                  console.log(`Blob created for ${relativePath} with SHA: ${blob.data.sha}`);
 
                   console.log('Pushing file blob to the tree');
                   treeEntries.push({
