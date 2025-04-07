@@ -159,124 +159,21 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ steps.get_installation_token.outputs.token || github.token }}
+        # Pass inputs to the script via environment variables
+        MANIFEST_PATH: ${{ inputs.manifestPath }}
+        COMMIT_MESSAGE: ${{ inputs.commitMessage }}
+        # GitHub Actions default env vars are automatically available (GITHUB_WORKSPACE, GITHUB_REF_NAME)
       run: |
+        # Stage files first using git commands
         git add "${{ inputs.manifestPath }}"
         find ${{ github.workspace }}/dist \( -name "*.js" -o -name "*.cjs" -o -name "*.map" -o -name "*.json" \) -print0 | xargs -0 git add -f
-        echo "Changed files:"
-        echo "$(git diff-index --cached --name-only HEAD)"
-        if [ -n "$(git diff-index --cached --name-only HEAD)" ]; then
-          node -e "
-            const fs = require('fs');
-            const path = require('path');
-            const github = require('@actions/github');
-            const glob = require('glob');
-            const manifestPath = path.relative('.', '${{ inputs.manifestPath }}');
 
-            async function pushChanges() {
-              const octokit = github.getOctokit(process.env.GITHUB_TOKEN);
-
-              const context = github.context;
-              const owner = context.repo.owner;
-              const repo = context.repo.repo;
-              const ref = 'heads/${{ github.ref_name }}';
-
-              try {
-                const currentCommit = await octokit.rest.git.getRef({
-                  owner,
-                  repo,
-                  ref
-                });
-
-                const treeEntries = [];
-
-                // Add manifest.json using content
-                console.log('Processing file:', manifestPath);
-                const manifestContent = fs.readFileSync(manifestPath, 'utf8');
-                treeEntries.push({
-                  path: manifestPath,
-                  mode: '100644',
-                  type: 'blob',
-                  content: manifestContent,
-                });
-
-                // Process dist files: create blobs and add SHAs to tree
-                const distPath = '${{ github.workspace }}/dist/';
-                const distFiles = glob.sync(distPath + '**/*.{js,cjs,map,json}');
-
-                console.log(`Processing ${distFiles.length} dist files...`);
-                for (const file of distFiles) {
-                  const relativePath = path.relative('.', file);
-                  // Get file size
-                  const stats = fs.statSync(file);
-                  const fileSizeInBytes = stats.size;
-                  const fileSizeInMegabytes = fileSizeInBytes / (1024 * 1024);
-
-                  console.log(`Processing file: ${relativePath}, Size: ${fileSizeInMegabytes.toFixed(2)} MB`);
-
-                  // Check if file exceeds 100MB limit
-                  if (fileSizeInMegabytes > 100) {
-                    console.error(`ERROR: File ${relativePath} exceeds the 100MB blob size limit.`);
-                    // Optionally, exit early: process.exit(1);
-                    // For now, let it proceed to attempt blob creation to see the API error
-                  }
-
-                  const fileContent = fs.readFileSync(file, 'utf8'); // Read as utf8 for blob creation
-
-                  // Create the blob using octokit.request
-                  console.log(`Creating blob for ${relativePath}...`);
-                  const blob = await octokit.request('POST /repos/{owner}/{repo}/git/blobs', {
-                    owner: owner,
-                    repo: repo,
-                    content: fileContent,
-                    encoding: 'utf-8'
-                  });
-                  console.log(`Blob created for ${relativePath} with SHA: ${blob.data.sha}`);
-
-                  console.log('Pushing file blob to the tree');
-                  treeEntries.push({
-                    path: relativePath,
-                    mode: '100644', // Ensure correct mode
-                    type: 'blob',
-                    sha: blob.data.sha, // Use the blob SHA
-                  });
-                  console.log(`Added blob for ${relativePath} with SHA: ${blob.data.sha}`);
-                }
-
-                console.log('Creating tree...');
-                const newTree = await octokit.rest.git.createTree({
-                  owner,
-                  repo,
-                  base_tree: currentCommit.data.object.sha,
-                  tree: treeEntries,
-                });
-                console.log(`Tree created with SHA: ${newTree.data.sha}`);
-
-                console.log('Creating commit...');
-                const newCommit = await octokit.rest.git.createCommit({
-                  owner,
-                  repo,
-                  message: '${{ inputs.commitMessage }}',
-                  tree: newTree.data.sha,
-                  parents: [currentCommit.data.object.sha]
-                });
-
-                await octokit.rest.git.updateRef({
-                  owner,
-                  repo,
-                  ref,
-                  sha: newCommit.data.sha,
-                  force: true
-                });
-
-                console.log('Changes pushed successfully');
-              } catch (error) {
-                console.error('Error pushing changes:', error);
-                process.exit(1);
-              }
-            }
-
-            pushChanges();
-          "
+        echo "Checking for staged changes..."
+        # Check if git add actually staged anything
+        if ! git diff --cached --quiet; then
+          echo "Changes detected. Running push script..."
+          # Execute the external Node.js script
+          node .github/scripts/push-changes.js
         else
-          echo "No changes to commit"
+          echo "No changes detected in manifest or dist folder."
         fi
