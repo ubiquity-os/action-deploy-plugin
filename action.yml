@@ -170,98 +170,73 @@ runs:
             const path = require('path');
             const github = require('@actions/github');
             const glob = require('glob');
-            const crypto = require('crypto');
             const manifestPath = path.relative('.', '${{ inputs.manifestPath }}');
-        
+
             async function pushChanges() {
               const octokit = github.getOctokit(process.env.GITHUB_TOKEN);
-        
+
               const context = github.context;
               const owner = context.repo.owner;
               const repo = context.repo.repo;
               const ref = 'heads/${{ github.ref_name }}';
-        
+
               try {
                 const currentCommit = await octokit.rest.git.getRef({
                   owner,
                   repo,
                   ref
                 });
-        
-                async function createBlobForFile(filepath) {
-                  const fileSize = fs.statSync(filepath).size;
-                  const fileContent = fs.readFileSync(filepath);
-        
-                  if (fileSize < 1000000) {
-                    return await octokit.rest.git.createBlob({
-                      owner,
-                      repo,
-                      content: fileContent.toString('base64'),
-                      encoding: 'base64'
-                    });
-                  }
-        
-                  console.log(`File ${filepath} is ${fileSize} bytes - using Git CLI fallback`);
-        
-                  // For large files, we'll use git hash-object instead of the API
-                  // Create a temporary directory for the large files
-                  const tempDir = path.join(process.cwd(), '.git-temp');
-                  if (!fs.existsSync(tempDir)) {
-                    fs.mkdirSync(tempDir);
-                  }
-        
-                  // Create a unique filename to avoid collisions
-                  const hash = crypto.createHash('md5').update(filepath).digest('hex');
-                  const tempFile = path.join(tempDir, hash);
-        
-                  // Copy the file to the temp location
-                  fs.copyFileSync(filepath, tempFile);
-        
-                  // Get the blob hash using git hash-object
-                  const { execSync } = require('child_process');
-                  const objectHash = execSync(`git hash-object -w ${tempFile}`).toString().trim();
-        
-                  // Delete the temp file
-                  fs.unlinkSync(tempFile);
-        
-                  return { sha: objectHash };
-                }
-        
-                console.log('Adding file:', manifestPath);
-                const manifestBlob = await createBlobForFile(manifestPath);
-        
-                const treeEntries = [
-                  {
-                    path: manifestPath,
-                    mode: '100644',
-                    type: 'blob',
-                    sha: manifestBlob.sha
-                  }
-                ];
-        
+
+                const treeEntries = [];
+
+                // Add manifest.json using content
+                console.log('Processing file:', manifestPath);
+                const manifestContent = fs.readFileSync(manifestPath, 'utf8');
+                treeEntries.push({
+                  path: manifestPath,
+                  mode: '100644',
+                  type: 'blob',
+                  content: manifestContent,
+                });
+
+                // Process dist files: create blobs and add SHAs to tree
                 const distPath = '${{ github.workspace }}/dist/';
                 const distFiles = glob.sync(distPath + '**/*.{js,cjs,map,json}');
-        
+
+                console.log(`Processing ${distFiles.length} dist files...`);
                 for (const file of distFiles) {
                   const relativePath = path.relative('.', file);
-                  console.log('Adding file:', relativePath);
-        
-                  const blob = await createBlobForFile(file);
+                  console.log('Processing file:', relativePath);
+                  const fileContent = fs.readFileSync(file, 'utf8'); // Read as utf8 for blob creation
+
+                  // Create the blob
+                  const blob = await octokit.rest.git.createBlob({
+                    owner,
+                    repo,
+                    content: fileContent,
+                    encoding: 'utf-8', // Specify encoding
+                  });
+
+                  // Add blob SHA to the tree
                   treeEntries.push({
                     path: relativePath,
-                    mode: '100644',
+                    mode: '100644', // Ensure correct mode
                     type: 'blob',
-                    sha: blob.sha
+                    sha: blob.data.sha, // Use the blob SHA
                   });
+                  console.log(`Added blob for ${relativePath} with SHA: ${blob.data.sha}`);
                 }
-        
+
+                console.log('Creating tree...');
                 const newTree = await octokit.rest.git.createTree({
                   owner,
                   repo,
                   base_tree: currentCommit.data.object.sha,
                   tree: treeEntries,
                 });
-        
+                console.log(`Tree created with SHA: ${newTree.data.sha}`);
+
+                console.log('Creating commit...');
                 const newCommit = await octokit.rest.git.createCommit({
                   owner,
                   repo,
@@ -269,7 +244,7 @@ runs:
                   tree: newTree.data.sha,
                   parents: [currentCommit.data.object.sha]
                 });
-        
+
                 await octokit.rest.git.updateRef({
                   owner,
                   repo,
@@ -277,14 +252,14 @@ runs:
                   sha: newCommit.data.sha,
                   force: true
                 });
-        
+
                 console.log('Changes pushed successfully');
               } catch (error) {
                 console.error('Error pushing changes:', error);
                 process.exit(1);
               }
             }
-        
+
             pushChanges();
           "
         else
