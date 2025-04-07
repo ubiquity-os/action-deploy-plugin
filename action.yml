@@ -209,7 +209,7 @@ runs:
                   console.log('Processing file:', relativePath);
                   const fileContent = fs.readFileSync(file, 'utf8'); // Read as utf8 for blob creation
 
-                  // Create the blob
+                  console.log('Creating file blob');
                   const blob = await octokit.rest.git.createBlob({
                     owner,
                     repo,
@@ -217,7 +217,7 @@ runs:
                     encoding: 'utf-8', // Specify encoding
                   });
 
-                  // Add blob SHA to the tree
+                  console.log('Pushing file blob to the tree');
                   treeEntries.push({
                     path: relativePath,
                     mode: '100644', // Ensure correct mode
