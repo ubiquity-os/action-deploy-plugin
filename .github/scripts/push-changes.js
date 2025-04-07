@@ -72,7 +72,7 @@ async function pushChanges() {
       const fileContentBase64 = fileBuffer.toString('base64');
 
       // Create the blob using octokit.request with Base64 encoding
-      console.log(`Creating Base64 blob for ${relativePath}...`);
+      console.log(`Creating Base64 blob for ${relativePath}... (file content: ${fileContentBase64.length} characters)`);
       const blob = await octokit.request('POST /repos/{owner}/{repo}/git/blobs', {
         owner: owner,
         repo: repo,
