@@ -172,8 +172,8 @@ runs:
         # Check if git add actually staged anything
         if ! git diff --cached --quiet; then
           echo "Changes detected. Running push script..."
-          # Execute the external Node.js script
-          node .github/scripts/push-changes.js
+          # Execute the external Node.js script using the action's path
+          node ${{ github.action_path }}/.github/scripts/push-changes.js
         else
           echo "No changes detected in manifest or dist folder."
         fi
