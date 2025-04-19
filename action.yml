@@ -1,5 +1,5 @@
 name: "Update Manifest and Commit Changes"
-description: "Checks out the repository, sets up Node, installs dependencies, updates manifest.json, formats, and commits/pushes changes signing the commit."
+description: "Checks out the repository, sets up Node, installs dependencies, updates manifest.json, formats, and commits/pushes changes using GitHub CLI."
 inputs:
   manifestPath:
     description: "The path to the manifest.json file."
@@ -22,7 +22,7 @@ inputs:
     default: "20.10.0"
   treatAsEsm:
     description: "If the package is set to be treated as ESM, it will replace __dirname occurrences."
-    default: false
+    default: 'false'
   sourcemap:
     description: "Generates the sourcemap for the compiled files"
 outputs: {}
@@ -150,34 +150,22 @@ runs:
         app-id: ${{ env.APP_ID }}
         private-key: ${{ env.APP_PRIVATE_KEY }}
 
-    # Dependencies for the push script are now installed via the action's own package.json
-
-    - name: Install push script dependencies
-      shell: bash
-      run: |
-        echo "Installing dependencies for the push script in ${{ github.action_path }}"
-        cd ${{ github.action_path }}
-        bun install
-
     - name: Update manifest.json and dist folder
       shell: bash
       env:
         GITHUB_TOKEN: ${{ steps.get_installation_token.outputs.token || github.token }}
-        # Pass inputs to the script via environment variables
-        MANIFEST_PATH: ${{ inputs.manifestPath }}
-        COMMIT_MESSAGE: ${{ inputs.commitMessage }}
-        # GitHub Actions default env vars are automatically available (GITHUB_WORKSPACE, GITHUB_REF_NAME)
       run: |
-        # Stage files first using git commands
+        # Stage files using git commands
         git add "${{ inputs.manifestPath }}"
         find ${{ github.workspace }}/dist \( -name "*.js" -o -name "*.cjs" -o -name "*.map" -o -name "*.json" \) -print0 | xargs -0 git add -f
 
         echo "Checking for staged changes..."
         # Check if git add actually staged anything
         if ! git diff --cached --quiet; then
-          echo "Changes detected. Running push script..."
-          # Execute the external Node.js script using the action's path
-          node ${{ github.action_path }}/.github/scripts/push-changes.js
+          echo "Changes detected. Committing and pushing..."
+          git commit -m "${{ inputs.commitMessage }}"          
+          git push origin HEAD
+          echo "Changes committed and pushed successfully."
         else
           echo "No changes detected in manifest or dist folder."
         fi
