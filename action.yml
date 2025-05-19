@@ -1,5 +1,5 @@
 name: "Update Manifest and Commit Changes"
-description: "Checks out the repository, sets up Node, installs dependencies, updates manifest.json, formats, and commits/pushes changes signing the commit."
+description: "Checks out the repository, sets up Node, installs dependencies, updates manifest.json, formats, and commits/pushes changes using GitHub CLI."
 inputs:
   manifestPath:
     description: "The path to the manifest.json file."
@@ -22,7 +22,7 @@ inputs:
     default: "20.10.0"
   treatAsEsm:
     description: "If the package is set to be treated as ESM, it will replace __dirname occurrences."
-    default: false
+    default: "false"
   sourcemap:
     description: "Generates the sourcemap for the compiled files"
 outputs: {}
@@ -150,19 +150,32 @@ runs:
         app-id: ${{ env.APP_ID }}
         private-key: ${{ env.APP_PRIVATE_KEY }}
 
-    - name: Stage Changes
-      id: stage_changes
+    - name: Install push script dependencies
       shell: bash
       run: |
-        git add "${{ inputs.manifestPath }}"
-        find ${{ github.workspace }}/dist \( -name "*.js" -o -name "*.cjs" -o -name "*.map" -o -name "*.json" \) -print0 | xargs -0 git add -f
-        git diff --cached --quiet || echo "staged=true" >> $GITHUB_OUTPUT
+        echo "Installing dependencies for the push script in ${{ github.action_path }}"
+        cd ${{ github.action_path }}
+        bun install
 
     - name: Update manifest.json and dist folder
-      if: steps.stage_changes.outputs.staged == 'true'
-      uses: dsanders11/github-app-commit-action@v1.5.0
-      with:
-        message: ${{ inputs.commitMessage }}
-        force: true
-        token: ${{ steps.get_installation_token.outputs.token || github.token }}
-        ref: ${{ github.ref_name }}
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ steps.get_installation_token.outputs.token || github.token }}
+        GITHUB_WORKSPACE: ${{ github.workspace }}
+        COMMIT_MESSAGE: ${{ inputs.commitMessage }}
+        MANIFEST_PATH: ${{ inputs.manifestPath }}
+        GITHUB_REF_NAME: ${{ github.ref_name }}
+      run: |
+        # Stage files using git commands
+        git add "${{ inputs.manifestPath }}"
+        find ${{ github.workspace }}/dist \( -name "*.js" -o -name "*.cjs" -o -name "*.map" -o -name "*.json" \) -print0 | xargs -0 git add -f
+
+        echo "Checking for staged changes..."
+        # Check if git add actually staged anything
+        if ! git diff --cached --quiet; then
+          echo "Changes detected. Committing and pushing..."
+          bun ${{ github.action_path }}/.github/scripts/push-changes.js
+          echo "Changes committed and pushed successfully."
+        else
+          echo "No changes detected in manifest or dist folder."
+        fi

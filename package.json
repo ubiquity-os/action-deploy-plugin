@@ -1,0 +1,13 @@
+{
+  "name": "action-deploy-plugin-internal",
+  "version": "1.0.0",
+  "description": "Internal dependencies for the composite action",
+  "private": true,
+  "dependencies": {
+    "@actions/github": "^6.0.0",
+    "glob": "^10.0.0"
+  },
+  "devDependencies": {
+    "prettier": "^3.5.3"
+  }
+}
