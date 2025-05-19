@@ -59,7 +59,8 @@ async function pushChanges() {
     console.log(`Processing ${distFiles.length} dist files...`);
     for (const file of distFiles) {
       const relativePath = path.relative(githubWorkspace, file);
-      console.log(`Processing file: ${relativePath}`);
+      const fileStats = fs.statSync(file);
+      console.log(`Processing file: ${relativePath} (${fileStats.size} bytes)`);
       allFilesToCommit.push({
         path: relativePath,
         content: fs.readFileSync(file, "utf8"),
