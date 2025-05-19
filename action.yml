@@ -1,5 +1,5 @@
 name: "Update Manifest and Commit Changes"
-description: "Checks out the repository, sets up Node, installs dependencies, updates manifest.json, formats, and commits/pushes changes using GitHub CLI."
+description: "Checks out the repository, sets up Node, installs dependencies, updates manifest.json, formats, and commits/pushes changes signing the commit."
 inputs:
   manifestPath:
     description: "The path to the manifest.json file."
