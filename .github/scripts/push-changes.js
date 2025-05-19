@@ -50,7 +50,7 @@ async function pushChanges() {
 
     console.log("Processing manifest file:", manifestRelativePath);
     allFilesToCommit.push({
-      path: manifestFullPath,
+      path: manifestRelativePath,
       content: fs.readFileSync(manifestFullPath, "utf8"),
     });
 
