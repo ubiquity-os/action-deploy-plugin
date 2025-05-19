@@ -141,13 +141,8 @@ async function pushChanges() {
         const chunkSize = chunk.length;
         const endPosition = startPosition + chunkSize;
 
-        let operation = "appending to";
-        if (i === 0) {
-          operation = "creating";
-        }
-
         console.log(
-          `${operation} ${largeFile.path} (chunk ${i + 1}/${largeFile.totalChunks}, bytes ${startPosition}-${endPosition - 1})`,
+          `${i === 0 ? "Creating" : "Appending to"} ${largeFile.path} (chunk ${i + 1}/${largeFile.totalChunks}, bytes ${startPosition}-${endPosition - 1})`,
         );
 
         const base64Content = Buffer.from(chunk).toString("base64");
