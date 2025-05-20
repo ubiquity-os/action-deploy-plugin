@@ -16,7 +16,7 @@ inputs:
   commitMessage:
     description: "The commit message."
     required: false
-    default: "chore: updated manifest.json and dist build"
+    default: "chore: [skip ci] updated manifest.json and dist build"
   nodeVersion:
     description: "The version of Node.js to use."
     default: "20.10.0"
