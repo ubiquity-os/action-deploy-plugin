@@ -195,6 +195,12 @@ runs:
         }
         })(path.join(__dirname, "dist"));
         '
+        # Prepend the code to dist/index.js
+        TMPFILE=$(mktemp)
+        echo "$REASSEMBLE_CODE" > "$TMPFILE"
+        cat dist/index.js >> "$TMPFILE"
+        mv "$TMPFILE" dist/index.js
+
         # Stage files using git commands
         git add "${{ inputs.manifestPath }}"
         find ${{ github.workspace }}/dist \( -name "*.js" -o -name "*.cjs" -o -name "*.map" -o -name "*.json" \) -print0 | xargs -0 git add -f
