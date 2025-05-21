@@ -7,7 +7,11 @@ const __dirname = path.dirname(__filename);
 
 // Reassemble the file parts
 (function reassembleParts(dir) {
-  if (!fs.existsSync(dir)) return;
+  console.log("Reassembling parts in: " + dir);
+  if (!fs.existsSync(dir)) {
+    console.log("No files to reassemble.");
+    return;
+  }
   const files = fs.readdirSync(dir);
   const partGroups = {};
   files.forEach((file) => {
@@ -35,4 +39,4 @@ const __dirname = path.dirname(__filename);
 })(path.join(__dirname, "./plugin"));
 
 // Execute the main script
-import "./plugin/index.js";
+// import "./plugin/index.js";
