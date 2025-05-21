@@ -28,7 +28,10 @@ const path = require("path");
     parts.forEach((part) => fs.unlinkSync(path.join(dir, part.file)));
     console.log(`Reassembled ${outPath}`);
   }
+  try {
+    const plugin = require("./plugin/index.js");
+    console.log("Plugin loaded successfully");
+  } catch (err) {
+    console.error("Failed to load plugin:", err);
+  }
 })(path.join(__dirname, "./plugin"));
-
-// Execute the main script
-require("./plugin/index.js");

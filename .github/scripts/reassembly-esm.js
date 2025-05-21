@@ -36,7 +36,7 @@ const __dirname = path.dirname(__filename);
     parts.forEach((part) => fs.unlinkSync(path.join(dir, part.file)));
     console.log(`Reassembled ${outPath}`);
   }
+  import("./plugin/index.js")
+    .then(() => console.log("Plugin loaded successfully"))
+    .catch((err) => console.error("Failed to load plugin:", err));
 })(path.join(__dirname, "./plugin"));
-
-// Execute the main script
-// import "./plugin/index.js";
