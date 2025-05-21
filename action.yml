@@ -49,7 +49,7 @@ runs:
       run: |
         bun add -DE @vercel/ncc
         echo "Compiling plugin..."
-        bun ncc build ${{ inputs.pluginEntry }} --external "./tests" -m ${{ inputs.sourcemap == 'true' && '-s' || '' }} -o dist --out index_main.js
+        bun ncc build ${{ inputs.pluginEntry }} --external "./tests" -m ${{ inputs.sourcemap == 'true' && '-s' || '' }} -o dist/plugin
         echo "Compiling plugin types..."
         bun ncc build ${{ inputs.schemaPath }} --external "./tests" -m -o plugin
 
@@ -58,7 +58,7 @@ runs:
       shell: bash
       run: |
         if [ "${{ inputs.treatAsEsm }}" = "true" ]; then
-          sed -i 's/__dirname/import.meta.dirname/g' "${{ github.workspace }}/dist/index_main.js"
+          sed -i 's/__dirname/import.meta.dirname/g' "${{ github.workspace }}/dist/plugin/index.js"
         fi
 
     - name: Update manifest configuration JSON
@@ -180,6 +180,7 @@ runs:
         # Stage files using git commands
         git add "${{ inputs.manifestPath }}"
         find ${{ github.workspace }}/dist \( -name "*.js" -o -name "*.cjs" -o -name "*.map" -o -name "*.json" \) -print0 | xargs -0 git add -f
+        find ${{ github.workspace }}/dist/plugin \( -name "*.js" -o -name "*.cjs" -o -name "*.map" -o -name "*.json" \) -print0 | xargs -0 git add -f
 
         echo "Checking for staged changes..."
         # Check if git add actually staged anything
