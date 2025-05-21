@@ -49,7 +49,7 @@ runs:
       run: |
         bun add -DE @vercel/ncc
         echo "Compiling plugin..."
-        bun ncc build ${{ inputs.pluginEntry }} --external "./tests" -m ${{ inputs.sourcemap == 'true' && '-s' || '' }} -o dist
+        bun ncc build ${{ inputs.pluginEntry }} --external "./tests" -m ${{ inputs.sourcemap == 'true' && '-s' || '' }} -o dist --out index_main.js
         echo "Compiling plugin types..."
         bun ncc build ${{ inputs.schemaPath }} --external "./tests" -m -o plugin
 
@@ -58,7 +58,7 @@ runs:
       shell: bash
       run: |
         if [ "${{ inputs.treatAsEsm }}" = "true" ]; then
-          sed -i 's/__dirname/import.meta.dirname/g' "${{ github.workspace }}/dist/index.js"
+          sed -i 's/__dirname/import.meta.dirname/g' "${{ github.workspace }}/dist/index_main.js"
         fi
 
     - name: Update manifest configuration JSON
@@ -163,75 +163,10 @@ runs:
         TREAT_AS_ESM: ${{ inputs.treatAsEsm }}
       run: |
         if [[ "${TREAT_AS_ESM}" == "true" ]]; then
-        REASSEMBLE_CODE='import fs from "fs";
-        import path from "path";
-        import { fileURLToPath } from "url";
-        const __filename = fileURLToPath(import.meta.url);
-        const __dirname = path.dirname(__filename);
-        (function reassembleParts(dir) {
-        if (!fs.existsSync(dir)) return;
-        const files = fs.readdirSync(dir);
-        const partGroups = {};
-        files.forEach(file => {
-        const match = file.match(/^(.*)\.part(\d+)$/);
-        if (match) {
-        const base = match[1];
-        if (!partGroups[base]) partGroups[base] = [];
-        partGroups[base].push({ file, index: parseInt(match[2], 10) });
-        }
-        });
-        for (const base in partGroups) {
-        const parts = partGroups[base].sort((a, b) => a.index - b.index);
-        const outPath = path.join(dir, base);
-        const writeStream = fs.createWriteStream(outPath);
-        parts.forEach(part => {
-        const partPath = path.join(dir, part.file);
-        const data = fs.readFileSync(partPath);
-        writeStream.write(data);
-        });
-        writeStream.end();
-        parts.forEach(part => fs.unlinkSync(path.join(dir, part.file)));
-        console.log(`Reassembled ${outPath}`);
-        }
-        })(path.join(__dirname, "dist"));
-        '
+          cp "${{ github.action_path }}/.github/scripts/reassembly-esm.js" dist/index.js
         else
-        REASSEMBLE_CODE='const fs = require("fs");
-        const path = require("path");
-        (function reassembleParts(dir) {
-        if (!fs.existsSync(dir)) return;
-        const files = fs.readdirSync(dir);
-        const partGroups = {};
-        files.forEach(file => {
-        const match = file.match(/^(.*)\.part(\d+)$/);
-        if (match) {
-        const base = match[1];
-        if (!partGroups[base]) partGroups[base] = [];
-        partGroups[base].push({ file, index: parseInt(match[2], 10) });
-        }
-        });
-        for (const base in partGroups) {
-        const parts = partGroups[base].sort((a, b) => a.index - b.index);
-        const outPath = path.join(dir, base);
-        const writeStream = fs.createWriteStream(outPath);
-        parts.forEach(part => {
-        const partPath = path.join(dir, part.file);
-        const data = fs.readFileSync(partPath);
-        writeStream.write(data);
-        });
-        writeStream.end();
-        parts.forEach(part => fs.unlinkSync(path.join(dir, part.file)));
-        console.log(`Reassembled ${outPath}`);
-        }
-        })(path.join(__dirname, "dist"));
-        '
+          cp "${{ github.action_path }}/.github/scripts/reassembly-cjs.js" dist/index.js
         fi
-  
-        # Prepend the code to dist/index.js
-        TMPFILE=$(mktemp)
-        echo "$REASSEMBLE_CODE" > "$TMPFILE"
-        cat dist/index.js >> "$TMPFILE"
-        mv "$TMPFILE" dist/index.js
 
     - name: Update manifest.json and dist folder
       shell: bash
