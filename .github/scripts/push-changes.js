@@ -9,7 +9,7 @@ const githubToken = process.env.GITHUB_TOKEN;
 const githubWorkspace = process.env.GITHUB_WORKSPACE;
 const githubRefName = process.env.GITHUB_REF_NAME;
 
-const MAX_FILE_SIZE = 10 * 1024 * 1024;
+const MAX_FILE_SIZE = 30 * 1024 * 1024; // 30MB
 
 if (
   !manifestPathInput ||
@@ -27,12 +27,10 @@ if (
 function splitContentIntoChunks(content, maxChunkSize) {
   const chunks = [];
   let position = 0;
-
   while (position < content.length) {
     chunks.push(content.slice(position, position + maxChunkSize));
     position += maxChunkSize;
   }
-
   return chunks;
 }
 
@@ -60,12 +58,13 @@ async function pushChanges() {
     );
 
     let parentCommitSha = currentCommit.data.object.sha;
-    const regularFilesToCommit = [];
-    const largeFilesToCommit = [];
+    const treeEntries = [];
 
     console.log("Processing manifest file:", manifestRelativePath);
-    regularFilesToCommit.push({
+    treeEntries.push({
       path: manifestRelativePath,
+      mode: "100644",
+      type: "blob",
       content: fs.readFileSync(manifestFullPath, "utf8"),
     });
 
@@ -80,129 +79,82 @@ async function pushChanges() {
 
       if (fileStats.size > MAX_FILE_SIZE) {
         console.log(
-          `Large file detected: ${relativePath}. Will commit in chunks.`,
+          `Large file detected: ${relativePath}. Will split into chunked parts.`,
         );
-
         const fileContent = fs.readFileSync(file);
-
         const chunks = splitContentIntoChunks(fileContent, MAX_FILE_SIZE);
-
-        largeFilesToCommit.push({
-          path: relativePath,
-          chunks: chunks,
-          totalChunks: chunks.length,
-        });
-
+        for (let i = 0; i < chunks.length; i++) {
+          treeEntries.push({
+            path: `${relativePath}.part${i + 1}`,
+            mode: "100644",
+            type: "blob",
+            content: chunks[i].toString("base64"),
+            encoding: "base64",
+          });
+        }
         console.log(
-          `Split ${relativePath} into ${chunks.length} sequential commits`,
+          `Split ${relativePath} into ${chunks.length} files: ${relativePath}.part1 ... .part${chunks.length}`,
         );
       } else {
-        regularFilesToCommit.push({
+        treeEntries.push({
           path: relativePath,
+          mode: "100644",
+          type: "blob",
           content: fs.readFileSync(file, "utf8"),
         });
       }
     }
 
-    const commitShas = [];
-
-    if (regularFilesToCommit.length > 0) {
-      const treeEntries = regularFilesToCommit.map((fileInfo) => ({
-        path: fileInfo.path,
-        mode: "100644",
-        type: "blob",
-        content: fileInfo.content,
-      }));
-
-      const newTree = await octokit.rest.git.createTree({
-        owner,
-        repo,
-        base_tree: parentCommitSha,
-        tree: treeEntries,
-      });
-
-      const newCommit = await octokit.rest.git.createCommit({
-        owner,
-        repo,
-        message: commitMessage + `\n\nUpdated regular files`,
-        tree: newTree.data.sha,
-        parents: [parentCommitSha],
-      });
-
-      commitShas.push(newCommit.data.sha);
-      parentCommitSha = newCommit.data.sha;
-      console.log(`Created commit for regular files: ${newCommit.data.sha}`);
-    }
-
-    for (const largeFile of largeFilesToCommit) {
-      let startPosition = 0;
-      let fileContent = Buffer.alloc(0);
-
-      for (let i = 0; i < largeFile.chunks.length; i++) {
-        const chunk = largeFile.chunks[i];
-        const chunkSize = chunk.length;
-        const endPosition = startPosition + chunkSize;
-
-        console.log(
-          `${i === 0 ? "Creating" : "Appending to"} ${largeFile.path} (chunk ${i + 1}/${largeFile.totalChunks}, bytes ${startPosition}-${endPosition - 1})`,
-        );
-
-        fileContent = Buffer.concat([fileContent, chunk]);
-
-        const base64Content = Buffer.from(fileContent).toString("base64");
-
-        const blob = await octokit.rest.git.createBlob({
+    const blobs = [];
+    for (const entry of treeEntries) {
+      let blob;
+      if (entry.encoding === "base64") {
+        blob = await octokit.rest.git.createBlob({
           owner,
           repo,
-          content: base64Content,
+          content: entry.content,
           encoding: "base64",
         });
-
-        const newTree = await octokit.rest.git.createTree({
+      } else {
+        blob = await octokit.rest.git.createBlob({
           owner,
           repo,
-          base_tree: parentCommitSha,
-          tree: [
-            {
-              path: largeFile.path,
-              mode: "100644",
-              type: "blob",
-              sha: blob.data.sha,
-            },
-          ],
+          content: entry.content,
+          encoding: "utf-8",
         });
-
-        const newCommit = await octokit.rest.git.createCommit({
-          owner,
-          repo,
-          message: `${commitMessage}\n\n${largeFile.path} (chunk ${i + 1}/${largeFile.totalChunks})`,
-          tree: newTree.data.sha,
-          parents: [parentCommitSha],
-        });
-
-        commitShas.push(newCommit.data.sha);
-        parentCommitSha = newCommit.data.sha;
-        console.log(
-          `Created commit for chunk ${i + 1}/${largeFile.totalChunks} of ${largeFile.path}: ${newCommit.data.sha}`,
-        );
-
-        startPosition = endPosition;
       }
-    }
-
-    if (commitShas.length > 0) {
-      await octokit.rest.git.updateRef({
-        owner,
-        repo,
-        ref,
-        sha: commitShas[commitShas.length - 1],
-        force: true,
+      blobs.push({
+        path: entry.path,
+        mode: entry.mode,
+        type: entry.type,
+        sha: blob.data.sha,
       });
-
-      console.log(`All ${commitShas.length} commits pushed successfully`);
-    } else {
-      console.log("No files to commit");
     }
+
+    const newTree = await octokit.rest.git.createTree({
+      owner,
+      repo,
+      base_tree: parentCommitSha,
+      tree: blobs,
+    });
+
+    const newCommit = await octokit.rest.git.createCommit({
+      owner,
+      repo,
+      message: commitMessage,
+      tree: newTree.data.sha,
+      parents: [parentCommitSha],
+    });
+
+    await octokit.rest.git.updateRef({
+      owner,
+      repo,
+      ref,
+      sha: newCommit.data.sha,
+      force: true,
+    });
+
+    console.log(`Commit ${newCommit.data.sha} pushed successfully!`);
   } catch (error) {
     console.error("Error pushing changes:", error);
     process.exit(1);
