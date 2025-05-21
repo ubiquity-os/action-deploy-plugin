@@ -9,7 +9,7 @@ const githubToken = process.env.GITHUB_TOKEN;
 const githubWorkspace = process.env.GITHUB_WORKSPACE;
 const githubRefName = process.env.GITHUB_REF_NAME;
 
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 30MB
+const MAX_FILE_SIZE = 30 * 1024 * 1024; // 30MB
 
 if (
   !manifestPathInput ||
