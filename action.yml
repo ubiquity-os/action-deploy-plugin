@@ -48,6 +48,8 @@ runs:
       shell: bash
       run: |
         bun add -DE @vercel/ncc
+        "Deleting previous dist..."
+        rm -rf dist
         echo "Compiling plugin..."
         bun ncc build ${{ inputs.pluginEntry }} --external "./tests" -m ${{ inputs.sourcemap == 'true' && '-s' || '' }} -o dist/plugin
         echo "Compiling plugin types..."
@@ -164,6 +166,7 @@ runs:
       run: |
         if [[ "${TREAT_AS_ESM}" == "true" ]]; then
           cp "${{ github.action_path }}/.github/scripts/reassembly-esm.js" dist/index.js
+          cp dist/plugin/package.json dist/package.json
         else
           cp "${{ github.action_path }}/.github/scripts/reassembly-cjs.js" dist/index.js
         fi
