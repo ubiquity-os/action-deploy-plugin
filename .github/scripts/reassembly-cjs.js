@@ -8,7 +8,7 @@ const path = require("path");
   const partGroups = {};
   files.forEach((file) => {
     console.log("Checking file: " + file);
-    const match = file.match(/^plugin\/(.*)\.part(\d+)$/);
+    const match = file.match(/^(.*)\.part(\d+)$/);
     if (match) {
       const base = match[1];
       if (!partGroups[base]) partGroups[base] = [];
@@ -28,7 +28,7 @@ const path = require("path");
     parts.forEach((part) => fs.unlinkSync(path.join(dir, part.file)));
     console.log(`Reassembled ${outPath}`);
   }
-})(path.join(__dirname, "dist/plugin"));
+})(path.join(__dirname, "./plugin"));
 
 // Execute the main script
 require("./plugin/index.js");
