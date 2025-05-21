@@ -48,7 +48,7 @@ runs:
       shell: bash
       run: |
         bun add -DE @vercel/ncc
-        "Deleting previous dist..."
+        echo "Deleting previous dist..."
         rm -rf dist
         echo "Compiling plugin..."
         bun ncc build ${{ inputs.pluginEntry }} --external "./tests" -m ${{ inputs.sourcemap == 'true' && '-s' || '' }} -o dist/plugin
