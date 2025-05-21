@@ -166,6 +166,35 @@ runs:
         MANIFEST_PATH: ${{ inputs.manifestPath }}
         GITHUB_REF_NAME: ${{ github.ref_name }}
       run: |
+        REASSEMBLE_CODE='const fs = require("fs");
+          const path = require("path");
+          (function reassembleParts(dir) {
+          if (!fs.existsSync(dir)) return;
+          const files = fs.readdirSync(dir);
+          const partGroups = {};
+          files.forEach(file => {
+          const match = file.match(/^(.*)\.part(\d+)$/);
+          if (match) {
+          const base = match[1];
+          if (!partGroups[base]) partGroups[base] = [];
+        partGroups[base].push({ file, index: parseInt(match[2], 10) });
+        }
+        });
+          for (const base in partGroups) {
+          const parts = partGroups[base].sort((a, b) => a.index - b.index);
+          const outPath = path.join(dir, base);
+          const writeStream = fs.createWriteStream(outPath);
+          parts.forEach(part => {
+          const partPath = path.join(dir, part.file);
+          const data = fs.readFileSync(partPath);
+          writeStream.write(data);
+        });
+          writeStream.end();
+          parts.forEach(part => fs.unlinkSync(path.join(dir, part.file)));
+          console.log(`Reassembled ${outPath}`);
+        }
+        })(path.join(__dirname, "dist"));
+        '
         # Stage files using git commands
         git add "${{ inputs.manifestPath }}"
         find ${{ github.workspace }}/dist \( -name "*.js" -o -name "*.cjs" -o -name "*.map" -o -name "*.json" \) -print0 | xargs -0 git add -f
