@@ -9,7 +9,7 @@ const githubToken = process.env.GITHUB_TOKEN;
 const githubWorkspace = process.env.GITHUB_WORKSPACE;
 const githubRefName = process.env.GITHUB_REF_NAME;
 
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 if (
   !manifestPathInput ||
@@ -136,6 +136,8 @@ async function pushChanges() {
 
     for (const largeFile of largeFilesToCommit) {
       let startPosition = 0;
+      let fileContent = Buffer.alloc(0);
+
       for (let i = 0; i < largeFile.chunks.length; i++) {
         const chunk = largeFile.chunks[i];
         const chunkSize = chunk.length;
@@ -145,7 +147,9 @@ async function pushChanges() {
           `${i === 0 ? "Creating" : "Appending to"} ${largeFile.path} (chunk ${i + 1}/${largeFile.totalChunks}, bytes ${startPosition}-${endPosition - 1})`,
         );
 
-        const base64Content = Buffer.from(chunk).toString("base64");
+        fileContent = Buffer.concat([fileContent, chunk]);
+
+        const base64Content = Buffer.from(fileContent).toString("base64");
 
         const blob = await octokit.rest.git.createBlob({
           owner,
