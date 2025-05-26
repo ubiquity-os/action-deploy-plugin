@@ -16,7 +16,7 @@ This GitHub Action automates the process of checking out a repository, setting u
 - **`schemaPath`**:
     - **Description**: The path to the plugin settings schema.
     - **Required**: No
-    - **Default**: `${{ github.workspace }}/src/types/plugin-input.js`
+    - **Default**: `${{ github.workspace }}/src/types/plugin-input.ts`
 
 - **`pluginEntry`**:
     - **Description**: The path to the plugin entry file.
@@ -41,13 +41,10 @@ This GitHub Action automates the process of checking out a repository, setting u
    Uses the `actions/setup-node@v4` action to set up a specified version of Node.js.
 
 3. **Install dependencies**:
-   Runs `yarn install` to install the project's dependencies with immutable and cache check settings.
+   Runs `bun install` to install the project's dependencies with frozen lockfile settings.
 
-4. **Compile TypeScript files**:
-   Compiles the TypeScript files using `yarn tsc` with the specified project configuration.
-
-5. **Build project**:
-   Adds the `@vercel/ncc` package and builds the project using `ncc`.
+4. **Build project**:
+   Adds the `@vercel/ncc` package and builds the project using `bun ncc`.
 
 6. **Update manifest configuration JSON**:
    Updates the `manifest.json` file with the plugin settings schema.
@@ -74,14 +71,13 @@ jobs:
         uses: ubiquity-os/action-deploy-plugin@main
         with:
           manifestPath: ${{ github.workspace }}/manifest.json
-          schemaPath: ${{ github.workspace }}/src/types/plugin-input.js
+          schemaPath: ${{ github.workspace }}/src/types/plugin-input.ts
           pluginEntry: ${{ github.workspace }}/src/index.ts
           commitMessage: "chore: updated manifest.json and dist build"
           nodeVersion: "20.10.0"
         env:
           APP_ID: ${{ secrets.APP_ID }}
           APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
-          APP_INSTALLATION_ID: ${{ secrets.APP_INSTALLATION_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
@@ -96,15 +92,14 @@ jobs:
 If GitHub App authentication is to be used, the following environment variables are needed:
 - **`APP_ID`**: The GitHub App ID.
 - **`APP_PRIVATE_KEY`**: The GitHub App private key.
-- **`APP_INSTALLATION_ID`**: The installation ID for the GitHub App.
 
 When `APP_ID` and `APP_PRIVATE_KEY` are provided, the action will use GitHub App authentication. If they are not provided, the action will default to using `GITHUB_TOKEN`.
 
 ## Features
 
-- Clones the repository and sets up Node.js.
-- Installs project dependencies and compiles TypeScript files.
-- Builds the project using `@vercel/ncc`.
+- Clones the repository and sets up Node.js and Bun.
+- Installs project dependencies using Bun.
+- Builds the project using `@vercel/ncc` via Bun.
 - Updates the `manifest.json` file.
-- Formats the project files using Prettier.
+- Formats the project files using Prettier via Bun.
 - Commits and pushes changes to the repository.
