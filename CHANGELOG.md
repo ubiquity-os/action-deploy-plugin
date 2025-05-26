@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.5](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.1.4...v1.1.5) (2025-05-26)
+
+
+### Bug Fixes
+
+* changed commit and code sign to use a dedicated action and CLI ([9b62c92](https://github.com/ubiquity-os/action-deploy-plugin/commit/9b62c9287b61ea1a9448e56f4de469f16c0ae512))
+* large files get committed properly ([092a224](https://github.com/ubiquity-os/action-deploy-plugin/commit/092a2244991c4d04639d545a8fe3ef0ff7f8529e))
+* use script instead of inlined js code and split files by commit ([9f705f3](https://github.com/ubiquity-os/action-deploy-plugin/commit/9f705f34a7e2434a38bdc084c3650f10706f6b3a))
+
 ## [1.1.4](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.1.3...v1.1.4) (2025-03-26)
 
 
