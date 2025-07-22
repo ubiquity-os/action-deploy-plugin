@@ -6,25 +6,32 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// We want to make sure that Node.js built-in modules are prefixed with 'node:'
 function fixNodeImports(content) {
   let fixed = content;
 
   builtinModules.forEach((module) => {
+    const escapedModule = module.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
     const patterns = [
-      new RegExp(`require\\(['"]${module}['"]\\)`, "g"),
-      new RegExp(`require\\(['"]${module}/`, "g"),
-      new RegExp(`from ['"]${module}['"]`, "g"),
-      new RegExp(`from ['"]${module}/`, "g"),
-      new RegExp(`import\\(['"]${module}['"]\\)`, "g"),
-      new RegExp(`import\\(['"]${module}/`, "g"),
+      new RegExp(`require\\s*\\(\\s*["']${escapedModule}["']\\s*\\)`, "g"),
+      new RegExp(`require\\s*\\(\\s*["']${escapedModule}/`, "g"),
+      new RegExp(`from\\s+["']${escapedModule}["']`, "g"),
+      new RegExp(`from\\s+["']${escapedModule}/`, "g"),
+      new RegExp(`import\\s*\\(\\s*["']${escapedModule}["']\\s*\\)`, "g"),
+      new RegExp(`import\\s*\\(\\s*["']${escapedModule}/`, "g"),
+      new RegExp(`(\\}|\\s)from\\s*["']${escapedModule}["']`, "g"),
+      new RegExp(`(\\}|\\s)from\\s*["']${escapedModule}/`, "g"),
     ];
 
     patterns.forEach((pattern) => {
       fixed = fixed.replace(pattern, (match) => {
-        return match
-          .replace(`'${module}`, `'node:${module}`)
-          .replace(`"${module}`, `"node:${module}`);
+        return match.replace(
+          new RegExp(`["']${escapedModule}`, "g"),
+          (quoteMatch) => {
+            const quote = quoteMatch[0];
+            return `${quote}node:${module}`;
+          },
+        );
       });
     });
   });
