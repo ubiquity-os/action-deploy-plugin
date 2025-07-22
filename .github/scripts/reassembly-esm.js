@@ -38,7 +38,7 @@ async function reassembleParts(dir) {
     console.log("No files to reassemble.");
     return;
   }
-  let files = fs.readdirSync(dir);
+  const files = fs.readdirSync(dir);
   const partGroups = {};
   files.forEach((file) => {
     console.log("Checking file: " + file);
@@ -71,14 +71,15 @@ async function reassembleParts(dir) {
     console.log(`Reassembled ${outPath}`);
   }
 
-  files = fs.readdirSync(dir);
-  files.forEach((file) => {
+  const generatedFiles = fs.readdirSync(dir);
+  generatedFiles.forEach((file) => {
     console.log("[POST GENERATION] Checking file: " + file);
     if (file.endsWith(".js") || file.endsWith(".mjs")) {
-      console.log(`Fixing Node.js imports in ${file}`);
-      const content = fs.readFileSync(file, "utf8");
+      const filePath = path.join(dir, file);
+      console.log(`Fixing Node.js imports in ${filePath}`);
+      const content = fs.readFileSync(filePath, "utf8");
       const fixedContent = fixNodeImports(content);
-      fs.writeFileSync(file, fixedContent, "utf8");
+      fs.writeFileSync(filePath, fixedContent, "utf8");
       console.log(`Fixed Node.js imports in ${file}`);
     }
   });
