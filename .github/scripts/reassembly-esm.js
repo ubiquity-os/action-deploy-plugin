@@ -9,24 +9,26 @@ const __dirname = path.dirname(__filename);
 // We want to make sure that Node.js built-in modules are prefixed with 'node:'
 function fixNodeImports(content) {
   let fixed = content;
-  
-  builtinModules.forEach(module => {
+
+  builtinModules.forEach((module) => {
     const patterns = [
-      new RegExp(`require\\(['"]${module}['"]\\)`, 'g'),
-      new RegExp(`require\\(['"]${module}/`, 'g'),
-      new RegExp(`from ['"]${module}['"]`, 'g'),
-      new RegExp(`from ['"]${module}/`, 'g'),
-      new RegExp(`import\\(['"]${module}['"]\\)`, 'g'),
-      new RegExp(`import\\(['"]${module}/`, 'g')
+      new RegExp(`require\\(['"]${module}['"]\\)`, "g"),
+      new RegExp(`require\\(['"]${module}/`, "g"),
+      new RegExp(`from ['"]${module}['"]`, "g"),
+      new RegExp(`from ['"]${module}/`, "g"),
+      new RegExp(`import\\(['"]${module}['"]\\)`, "g"),
+      new RegExp(`import\\(['"]${module}/`, "g"),
     ];
-    
-    patterns.forEach(pattern => {
+
+    patterns.forEach((pattern) => {
       fixed = fixed.replace(pattern, (match) => {
-        return match.replace(`'${module}`, `'node:${module}`).replace(`"${module}`, `"node:${module}`);
+        return match
+          .replace(`'${module}`, `'node:${module}`)
+          .replace(`"${module}`, `"node:${module}`);
       });
     });
   });
-  
+
   return fixed;
 }
 
@@ -68,11 +70,11 @@ async function reassembleParts(dir) {
     parts.forEach((part) => fs.unlinkSync(path.join(dir, part.file)));
     console.log(`Reassembled ${outPath}`);
 
-    if (outPath.endsWith('.js') || outPath.endsWith('.mjs')) {
+    if (outPath.endsWith(".js") || outPath.endsWith(".mjs")) {
       console.log(`Fixing Node.js imports in ${outPath}`);
-      const content = fs.readFileSync(outPath, 'utf8');
+      const content = fs.readFileSync(outPath, "utf8");
       const fixedContent = fixNodeImports(content);
-      fs.writeFileSync(outPath, fixedContent, 'utf8');
+      fs.writeFileSync(outPath, fixedContent, "utf8");
       console.log(`Fixed Node.js imports in ${outPath}`);
     }
   }
