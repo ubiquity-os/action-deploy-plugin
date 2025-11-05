@@ -141,8 +141,7 @@ runs:
     - name: Format manifest using Prettier
       shell: bash
       run: |
-        bun add -DE prettier
-        bun prettier --write .
+        npx prettier --write manifest.json
 
     - name: Get GitHub App token
       if: env.APP_ID != '' && env.APP_PRIVATE_KEY != ''
