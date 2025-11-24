@@ -29,6 +29,28 @@ outputs: {}
 runs:
   using: "composite"
   steps:
+    - name: Create GitHub App token
+      id: app-token
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ env.APP_ID }}
+        private-key: ${{ env.APP_PRIVATE_KEY }}
+
+    - name: Validate GitHub App token
+      shell: bash
+      run: |
+        if [[ -z "${{ steps.app-token.outputs.token }}" ]]; then
+          echo "Failed to generate GitHub App token."
+          exit 1
+        fi
+
+    - name: Get GitHub App User ID
+      id: get-user-id
+      shell: bash
+      run: echo "user-id=$(gh api "/users/${{ steps.app-token.outputs.app-slug }}[bot]" --jq .id)" >> "$GITHUB_OUTPUT"
+      env:
+        GH_TOKEN: ${{ steps.app-token.outputs.token }}
+
     - name: Check out the repository
       uses: actions/checkout@v4
 
@@ -141,22 +163,7 @@ runs:
     - name: Format manifest using Prettier
       shell: bash
       run: |
-        npx prettier --write manifest.json
-
-    - name: Get GitHub App token
-      if: env.APP_ID != '' && env.APP_PRIVATE_KEY != ''
-      uses: actions/create-github-app-token@v1
-      id: get_installation_token
-      with:
-        app-id: ${{ env.APP_ID }}
-        private-key: ${{ env.APP_PRIVATE_KEY }}
-
-    - name: Install push script dependencies
-      shell: bash
-      run: |
-        echo "Installing dependencies for the push script in ${{ github.action_path }}"
-        cd ${{ github.action_path }}
-        bun install
+        npx prettier --write "${{ inputs.manifestPath }}"
 
     - name: Inject reassembly code into dist/index.js
       shell: bash
@@ -170,25 +177,52 @@ runs:
           cp "${{ github.action_path }}/.github/scripts/reassembly-cjs.js" dist/index.js
         fi
 
+    - name: Validate GitHub App identity
+      shell: bash
+      run: |
+        if [[ -z "${{ steps.app-token.outputs.app-slug }}" || -z "${{ steps.get-user-id.outputs.user-id }}" ]]; then
+          echo "Incomplete GitHub App identity information."
+          exit 1
+        fi
+
     - name: Update manifest.json and dist folder
       shell: bash
       env:
-        GITHUB_TOKEN: ${{ steps.get_installation_token.outputs.token || github.token }}
-        GITHUB_WORKSPACE: ${{ github.workspace }}
+        GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         COMMIT_MESSAGE: ${{ inputs.commitMessage }}
         MANIFEST_PATH: ${{ inputs.manifestPath }}
-        GITHUB_REF_NAME: ${{ github.ref_name }}
+        GITHUB_WORKSPACE: ${{ github.workspace }}
+        APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        APP_USER_ID: ${{ steps.get-user-id.outputs.user-id }}
       run: |
-        # Stage files using git commands
-        git add "${{ inputs.manifestPath }}"
-        find ${{ github.workspace }}/dist \( -name "*.js" -o -name "*.cjs" -o -name "*.map" -o -name "*.json" \) -print0 | xargs -0 git add -f
-        find ${{ github.workspace }}/dist/plugin \( -name "*.js" -o -name "*.cjs" -o -name "*.map" -o -name "*.json" \) -print0 | xargs -0 git add -f
+        set -euo pipefail
+
+        if [[ -z "${APP_SLUG}" || -z "${APP_USER_ID}" ]]; then
+          echo "Missing GitHub App identity; aborting commit."
+          exit 1
+        fi
+
+        git config --global user.name "${APP_SLUG}[bot]"
+        git config --global user.email "${APP_USER_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
+
+        git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+        git add "${MANIFEST_PATH}"
+
+        if [[ -d "${GITHUB_WORKSPACE}/dist" ]]; then
+          find "${GITHUB_WORKSPACE}/dist" \( -name "*.js" -o -name "*.cjs" -o -name "*.map" -o -name "*.json" \) -print0 | xargs -0 git add -f
+        fi
+
+        if [[ -d "${GITHUB_WORKSPACE}/dist/plugin" ]]; then
+          find "${GITHUB_WORKSPACE}/dist/plugin" \( -name "*.js" -o -name "*.cjs" -o -name "*.map" -o -name "*.json" \) -print0 | xargs -0 git add -f
+        fi
 
         echo "Checking for staged changes..."
         # Check if git add actually staged anything
         if ! git diff --cached --quiet; then
           echo "Changes detected. Committing and pushing..."
-          bun ${{ github.action_path }}/.github/scripts/push-changes.js
+          git commit -m "${COMMIT_MESSAGE}"
+          git push
           echo "Changes committed and pushed successfully."
         else
           echo "No changes detected in manifest or dist folder."
