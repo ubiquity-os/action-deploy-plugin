@@ -202,11 +202,54 @@ runs:
           exit 1
         fi
 
+        # Retry function for git operations
+        retry_git_operation() {
+          local operation="$1"
+          local max_attempts=5
+          local attempt=1
+          local base_delay=10
+          local max_delay=300
+
+          while [[ $attempt -le $max_attempts ]]; do
+            echo "Attempting git operation: $operation (attempt $attempt/$max_attempts)"
+
+            if eval "$operation"; then
+              echo "Git operation succeeded on attempt $attempt"
+              return 0
+            else
+              local exit_code=$?
+              echo "Git operation failed on attempt $attempt with exit code $exit_code"
+
+              if [[ $attempt -eq $max_attempts ]]; then
+                echo "All retry attempts exhausted. Final failure."
+                return $exit_code
+              fi
+
+              # Calculate exponential backoff with jitter
+              local delay=$((base_delay * (2 ** (attempt - 1))))
+              if [[ $delay -gt $max_delay ]]; then
+                delay=$max_delay
+              fi
+              # Add jitter (±25%)
+              local jitter=$((RANDOM % (delay / 2)))
+              delay=$((delay + jitter - (delay / 4)))
+              if [[ $delay -lt 1 ]]; then
+                delay=1
+              fi
+
+              echo "Waiting ${delay} seconds before retry..."
+              sleep $delay
+              ((attempt++))
+            fi
+          done
+        }
+
         git config --global user.name "${APP_SLUG}[bot]"
         git config --global user.email "${APP_USER_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
 
         git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
+        # Stage files
         git add "${MANIFEST_PATH}"
 
         if [[ -d "${GITHUB_WORKSPACE}/dist" ]]; then
@@ -220,9 +263,14 @@ runs:
         echo "Checking for staged changes..."
         # Check if git add actually staged anything
         if ! git diff --cached --quiet; then
-          echo "Changes detected. Committing and pushing..."
-          git commit -m "${COMMIT_MESSAGE}"
-          git push
+          echo "Changes detected. Committing and pushing with retry logic..."
+
+          # Commit with retry
+          retry_git_operation "git commit -m \"${COMMIT_MESSAGE}\""
+
+          # Push with retry
+          retry_git_operation "git push"
+
           echo "Changes committed and pushed successfully."
         else
           echo "No changes detected in manifest or dist folder."
