@@ -105,7 +105,7 @@ runs:
 
             const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
             manifest["configuration"] = pluginSettingsSchema;
-            manifest["short_name"] = `${{ GITHUB_REPOSITORY }}@${{ GITHUB_REF_NAME }}`;
+            manifest["short_name"] = `${{ github.repository }}@${{ github.ref_name }}`;
 
             function customReviver(key, value) {
               if (typeof value === "object" && value !== null) {
