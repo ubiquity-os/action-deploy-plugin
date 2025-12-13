@@ -19,7 +19,7 @@ inputs:
     default: "chore: [skip ci] updated manifest.json and dist build"
   nodeVersion:
     description: "The version of Node.js to use."
-    default: "20.10.0"
+    default: "22.11.0"
   treatAsEsm:
     description: "If the package is set to be treated as ESM, it will replace __dirname occurrences."
     default: "false"
@@ -30,10 +30,10 @@ runs:
   using: "composite"
   steps:
     - name: Check out the repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     - name: Set up Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v5
       with:
         node-version: ${{ inputs.nodeVersion }}
 
