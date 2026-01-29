@@ -23,6 +23,9 @@ inputs:
   treatAsEsm:
     description: "If the package is set to be treated as ESM, it will replace __dirname occurrences."
     default: "false"
+  bundleSingleFile:
+    description: "Bundle plugin entry into a single file (disables code splitting)."
+    default: "false"
   sourcemap:
     description: "Generates the sourcemap for the compiled files"
 outputs: {}
@@ -47,13 +50,20 @@ runs:
     - name: Build project
       shell: bash
       run: |
-        bun add -DE @vercel/ncc
         echo "Deleting previous dist..."
         rm -rf "${{ github.workspace }}/dist"
-        echo "Compiling plugin..."
-        bun ncc build ${{ inputs.pluginEntry }} --external "./tests" -m ${{ inputs.sourcemap == 'true' && '-s' || '' }} -o dist/plugin
-        echo "Compiling plugin types..."
-        bun ncc build ${{ inputs.schemaPath }} --external "./tests" -m -o plugin
+        if [ "${{ inputs.bundleSingleFile }}" = "true" ]; then
+          echo "Compiling plugin (single file)..."
+          bun x esbuild ${{ inputs.pluginEntry }} --bundle --platform=node --format=esm --target=node20 --minify ${{ inputs.sourcemap == 'true' && '--sourcemap' || '' }} --external:./tests --outfile=dist/plugin/index.js
+          echo "Compiling plugin types (single file)..."
+          bun x esbuild ${{ inputs.schemaPath }} --bundle --platform=node --format=esm --target=node20 --minify --outfile=plugin/index.js
+        else
+          bun add -DE @vercel/ncc
+          echo "Compiling plugin..."
+          bun ncc build ${{ inputs.pluginEntry }} --external "./tests" -m ${{ inputs.sourcemap == 'true' && '-s' || '' }} -o dist/plugin
+          echo "Compiling plugin types..."
+          bun ncc build ${{ inputs.schemaPath }} --external "./tests" -m -o plugin
+        fi
 
     - name: Replace __dirname with import.meta.dirname
       if: ${{ inputs.treatAsEsm }}
@@ -165,6 +175,9 @@ runs:
         TREAT_AS_ESM: ${{ inputs.treatAsEsm }}
       run: |
         if [[ "${TREAT_AS_ESM}" == "true" ]]; then
+          if [ ! -f dist/plugin/package.json ]; then
+            printf '{"type":"module"}\n' > dist/plugin/package.json
+          fi
           cp "${{ github.action_path }}/.github/scripts/reassembly-esm.js" dist/index.js
           cp dist/plugin/package.json dist/package.json
         else

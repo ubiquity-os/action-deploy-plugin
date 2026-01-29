@@ -32,6 +32,18 @@ This GitHub Action automates the process of checking out a repository, setting u
     - **Description**: The version of Node.js to use.
     - **Default**: `20.10.0`
 
+- **`treatAsEsm`**:
+    - **Description**: If the package is set to be treated as ESM, it will replace __dirname occurrences.
+    - **Default**: `false`
+
+- **`bundleSingleFile`**:
+    - **Description**: Bundle the plugin entry into a single file (disables code splitting).
+    - **Default**: `false`
+
+- **`sourcemap`**:
+    - **Description**: Generates the sourcemap for the compiled files.
+    - **Default**: `false`
+
 ## Steps
 
 1. **Check out the repository**:
@@ -44,7 +56,7 @@ This GitHub Action automates the process of checking out a repository, setting u
    Runs `bun install` to install the project's dependencies with frozen lockfile settings.
 
 4. **Build project**:
-   Adds the `@vercel/ncc` package and builds the project using `bun ncc`.
+   Builds the project using `bun ncc` (or `esbuild` when `bundleSingleFile` is enabled).
 
 6. **Update manifest configuration JSON**:
    Updates the `manifest.json` file with the plugin settings schema.
