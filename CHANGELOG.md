@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.2.0](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.1.4...v1.2.0) (2026-01-29)
+
+
+### Features
+
+* add short_name to manifest in action.yml ([48a04b5](https://github.com/ubiquity-os/action-deploy-plugin/commit/48a04b59cd97476856b89b641d9d0a1992d98b40))
+* add single-file bundling option ([aafef9a](https://github.com/ubiquity-os/action-deploy-plugin/commit/aafef9aaaf2307830a6a45e95235574ab99c42a3))
+
+
+### Bug Fixes
+
+* changed commit and code sign to use a dedicated action and CLI ([9b62c92](https://github.com/ubiquity-os/action-deploy-plugin/commit/9b62c9287b61ea1a9448e56f4de469f16c0ae512))
+* ensure node imports have proper prefixes ([ab0874b](https://github.com/ubiquity-os/action-deploy-plugin/commit/ab0874ba7bc3ed90042fc738fabd882eec0ad02a))
+* large files get committed properly ([092a224](https://github.com/ubiquity-os/action-deploy-plugin/commit/092a2244991c4d04639d545a8fe3ef0ff7f8529e))
+* update node imports in reassembly-esm.js ([cb34619](https://github.com/ubiquity-os/action-deploy-plugin/commit/cb34619ef3c62e8b72d6ba19f2b28db3303dc08e))
+* use script instead of inlined js code and split files by commit ([9f705f3](https://github.com/ubiquity-os/action-deploy-plugin/commit/9f705f34a7e2434a38bdc084c3650f10706f6b3a))
+
 ## [1.1.4](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.1.3...v1.1.4) (2025-03-26)
 
 
