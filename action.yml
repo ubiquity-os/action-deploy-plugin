@@ -175,9 +175,9 @@ runs:
         TREAT_AS_ESM: ${{ inputs.treatAsEsm }}
       run: |
         if [[ "${TREAT_AS_ESM}" == "true" ]]; then
-          if [ ! -f dist/plugin/package.json ]; then
-            printf '{"type":"module"}\n' > dist/plugin/package.json
-          fi
+#          if [ ! -f dist/plugin/package.json ]; then
+#            printf '{"type":"module"}\n' > dist/plugin/package.json
+#          fi
           cp "${{ github.action_path }}/.github/scripts/reassembly-esm.js" dist/index.js
           cp dist/plugin/package.json dist/package.json
         else
