@@ -59,7 +59,7 @@ This GitHub Action automates the process of checking out a repository, setting u
    Builds the project using `bun ncc` (or `esbuild` when `bundleSingleFile` is enabled).
 
 6. **Update manifest configuration JSON**:
-   Updates the `manifest.json` file with the plugin settings schema.
+   Updates the `manifest.json` file with plugin metadata derived from code exports and `package.json`.
 
 7. **Format manifest using Prettier**:
    Installs Prettier and formats the `manifest.json` file and other project files.
@@ -107,11 +107,83 @@ If GitHub App authentication is to be used, the following environment variables 
 
 When `APP_ID` and `APP_PRIVATE_KEY` are provided, the action will use GitHub App authentication. If they are not provided, the action will default to using `GITHUB_TOKEN`.
 
+## Manifest Generation
+
+The action auto-generates `manifest.json` fields from code exports and `package.json`. This keeps the manifest in sync with the source code and avoids manual drift.
+
+### Generated Fields
+
+| Manifest field | Source | Export name |
+|---|---|---|
+| `name` | `package.json` | — |
+| `description` | `package.json` | — |
+| `commands` | Schema module export | `pluginCommands` |
+| `ubiquity:listeners` | Schema module export | `pluginListeners` |
+| `skipBotEvents` | Schema module export | `pluginSkipBotEvents` |
+| `configuration` | Schema module export | `pluginSettingsSchema` |
+| `short_name` | Auto (`owner/repo@ref`) | — |
+| `homepage_url` | Preserved from existing manifest | — |
+
+### Plugin Schema Exports
+
+Add the following named exports to your schema file (the file referenced by `schemaPath`, default `src/types/plugin-input.ts`):
+
+```typescript
+import { StaticDecode, Type as T } from "@sinclair/typebox";
+
+// Plugin settings schema (existing, used for manifest.configuration)
+export const pluginSettingsSchema = T.Object(
+  { configurableResponse: T.String({ default: "Hello, world!" }) },
+  { default: {} },
+);
+
+// Command definitions (used for manifest.commands)
+export const pluginCommands = {
+  hello: {
+    description: "Say hello with an argument.",
+    "ubiquity:example": "/hello world",
+  },
+};
+
+// Webhook event listeners (used for manifest["ubiquity:listeners"])
+export const pluginListeners = [
+  "issue_comment.created",
+  "issue_comment.edited",
+];
+
+// Whether to skip bot-triggered events (used for manifest.skipBotEvents)
+export const pluginSkipBotEvents = true;
+
+export type PluginSettings = StaticDecode<typeof pluginSettingsSchema>;
+```
+
+### Backward Compatibility
+
+All new exports are optional. If an export is missing, the action will:
+
+- Preserve any existing value in `manifest.json`
+- Emit a warning in the CI log
+
+Plugins that only export `pluginSettingsSchema` will continue to work exactly as before.
+
+### Package.json Fields
+
+Ensure your plugin's `package.json` includes `name` and `description`:
+
+```json
+{
+  "name": "my-plugin",
+  "description": "What this plugin does."
+}
+```
+
+If either field is absent or empty, the existing manifest value is preserved and a warning is emitted.
+
 ## Features
 
 - Clones the repository and sets up Node.js and Bun.
 - Installs project dependencies using Bun.
 - Builds the project using `@vercel/ncc` via Bun.
-- Updates the `manifest.json` file.
+- Auto-generates manifest metadata from code exports and `package.json`.
 - Formats the project files using Prettier via Bun.
 - Commits and pushes changes to the repository.

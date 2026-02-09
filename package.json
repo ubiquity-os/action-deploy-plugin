@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Internal dependencies for the composite action",
   "private": true,
+  "scripts": {
+    "test": "node --test .github/scripts/__tests__/*.test.js"
+  },
   "dependencies": {
     "@actions/github": "^6.0.0",
     "glob": "^10.0.0"
