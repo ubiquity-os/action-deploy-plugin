@@ -90,9 +90,11 @@ Integration testing is done at the GitHub Actions workflow level by consuming re
   - `pluginCommands` → `manifest.commands`
   - `pluginListeners` → `manifest["ubiquity:listeners"]`
   - `pluginSkipBotEvents` → `manifest.skipBotEvents`
+- If `pluginListeners` is not exported, the action scans TypeScript source for a `SupportedEvents` type alias and extracts the string literal union members as listener events
 - `name` and `description` are read from the consuming plugin's `package.json`
 - Missing exports emit warnings but do not fail the build (backward compatible)
 - Manifest field ordering is deterministic to avoid noisy diffs
+- Local testing: `node .github/scripts/update-manifest.js /path/to/plugin-project`
 
 ## Release Process
 

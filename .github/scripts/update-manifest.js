@@ -1,5 +1,7 @@
 const fs = require("fs").promises;
+const fsSync = require("fs");
 const path = require("path");
+const { glob } = require("glob");
 
 /**
  * Emits a GitHub Actions warning annotation.
@@ -89,6 +91,58 @@ function validateListeners(listeners) {
 }
 
 /**
+ * Scans TypeScript source files in the project for a `SupportedEvents` type alias
+ * and extracts the string literal union members.
+ *
+ * Looks for patterns like:
+ *   export type SupportedEvents = "issue_comment.created" | "pull_request.opened";
+ *
+ * @param {string} projectRoot - The root directory of the consuming plugin project
+ * @returns {Promise<string[]|null>} Array of event strings, or null if not found
+ */
+async function extractSupportedEvents(projectRoot) {
+  const srcDir = path.join(projectRoot, "src");
+
+  try {
+    await fs.access(srcDir);
+  } catch {
+    return null;
+  }
+
+  const tsFiles = await glob("**/*.ts", { cwd: srcDir, absolute: true });
+
+  for (const file of tsFiles) {
+    const content = await fs.readFile(file, "utf8");
+
+    // Match: (export)? type SupportedEvents = "event.action" | "other.event" ...;
+    // The 's' flag makes '.' match newlines for multiline type definitions.
+    const match = content.match(
+      /(?:export\s+)?type\s+SupportedEvents\s*=\s*(.+?);/s,
+    );
+    if (!match) continue;
+
+    const unionBody = match[1];
+    // Extract all quoted string literals from the union
+    const literals = [];
+    const literalRegex = /["']([^"']+)["']/g;
+    let literalMatch;
+    while ((literalMatch = literalRegex.exec(unionBody)) !== null) {
+      literals.push(literalMatch[1]);
+    }
+
+    if (literals.length > 0) {
+      const relativePath = path.relative(projectRoot, file);
+      console.log(
+        `Found SupportedEvents type in ${relativePath}: ${JSON.stringify(literals)}`,
+      );
+      return literals;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Orders manifest fields in a deterministic order to avoid noisy diffs.
  */
 function orderManifestFields(manifest) {
@@ -124,9 +178,17 @@ function orderManifestFields(manifest) {
  * @param {object} pluginModule - The loaded plugin schema module exports
  * @param {object|null} packageJson - The consuming plugin's package.json (or null if unreadable)
  * @param {object} repoInfo - { repository: string, refName: string }
+ * @param {object} [options] - Additional options
+ * @param {string[]|null} [options.supportedEvents] - Events extracted from SupportedEvents type
  * @returns {{ manifest: object, warnings: string[] }}
  */
-function buildManifest(existingManifest, pluginModule, packageJson, repoInfo) {
+function buildManifest(
+  existingManifest,
+  pluginModule,
+  packageJson,
+  repoInfo,
+  options = {},
+) {
   const manifest = { ...existingManifest };
   const warnings = [];
 
@@ -182,8 +244,9 @@ function buildManifest(existingManifest, pluginModule, packageJson, repoInfo) {
     );
   }
 
-  // --- ubiquity:listeners (from pluginListeners export) ---
+  // --- ubiquity:listeners (from pluginListeners export, fallback to SupportedEvents type) ---
   const pluginListeners = pluginModule.pluginListeners;
+  const supportedEvents = options.supportedEvents;
   if (pluginListeners !== undefined && pluginListeners !== null) {
     const validationError = validateListeners(pluginListeners);
     if (validationError) {
@@ -193,9 +256,21 @@ function buildManifest(existingManifest, pluginModule, packageJson, repoInfo) {
     } else {
       manifest["ubiquity:listeners"] = pluginListeners;
     }
+  } else if (supportedEvents !== undefined && supportedEvents !== null) {
+    const validationError = validateListeners(supportedEvents);
+    if (validationError) {
+      warnings.push(
+        `manifest["ubiquity:listeners"]: SupportedEvents type found but invalid: ${validationError}. Skipping.`,
+      );
+    } else {
+      manifest["ubiquity:listeners"] = supportedEvents;
+      console.log(
+        'manifest["ubiquity:listeners"]: derived from SupportedEvents type.',
+      );
+    }
   } else {
     warnings.push(
-      'manifest["ubiquity:listeners"]: no "pluginListeners" export found in schema module. Field will not be auto-generated.',
+      'manifest["ubiquity:listeners"]: no "pluginListeners" export or SupportedEvents type found. Field will not be auto-generated.',
     );
   }
 
@@ -253,31 +328,73 @@ async function loadPluginModule(modulePath) {
 }
 
 /**
- * Main entrypoint — reads files, builds manifest, writes output.
+ * Resolves configuration from environment variables (CI mode) or CLI arguments (local mode).
+ *
+ * Local mode usage:
+ *   node update-manifest.js /path/to/plugin-project
+ *
+ * This will:
+ *   - Use the project's manifest.json, package.json, and src/ directory
+ *   - Attempt to load the compiled schema from plugin/index.js
+ *   - Use "local/project@local" as the short_name
  */
-async function main() {
+function resolveConfig() {
+  const localProjectRoot = process.argv[2];
+
+  if (localProjectRoot) {
+    const projectRoot = path.resolve(localProjectRoot);
+    return {
+      manifestPath: path.join(projectRoot, "manifest.json"),
+      pluginModulePath: path.join(projectRoot, "plugin", "index.js"),
+      projectRoot,
+      repository: `local/${path.basename(projectRoot)}`,
+      refName: "local",
+    };
+  }
+
   const manifestPath = process.env.MANIFEST_PATH;
-  const pluginModulePath = path.resolve(process.env.PLUGIN_MODULE_PATH);
-  const githubWorkspace = process.env.GITHUB_WORKSPACE;
-  const githubRepository = process.env.GITHUB_REPOSITORY;
-  const githubRefName = process.env.GITHUB_REF_NAME;
+  const pluginModulePath = process.env.PLUGIN_MODULE_PATH
+    ? path.resolve(process.env.PLUGIN_MODULE_PATH)
+    : null;
+  const projectRoot = process.env.GITHUB_WORKSPACE;
+  const repository = process.env.GITHUB_REPOSITORY;
+  const refName = process.env.GITHUB_REF_NAME;
 
   if (
     !manifestPath ||
     !pluginModulePath ||
-    !githubWorkspace ||
-    !githubRepository ||
-    !githubRefName
+    !projectRoot ||
+    !repository ||
+    !refName
   ) {
     console.error(
       "Missing required environment variables (MANIFEST_PATH, PLUGIN_MODULE_PATH, GITHUB_WORKSPACE, GITHUB_REPOSITORY, GITHUB_REF_NAME)",
     );
+    console.error(
+      "\nFor local testing, pass the project root as an argument:\n  node update-manifest.js /path/to/plugin-project",
+    );
     process.exit(1);
   }
 
+  return { manifestPath, pluginModulePath, projectRoot, repository, refName };
+}
+
+/**
+ * Main entrypoint — reads files, builds manifest, writes output.
+ */
+async function main() {
+  const config = resolveConfig();
+
   // Load the compiled schema module
-  console.log(`Loading plugin module from: ${pluginModulePath}`);
-  const pluginModule = await loadPluginModule(pluginModulePath);
+  let pluginModule = {};
+  if (fsSync.existsSync(config.pluginModulePath)) {
+    console.log(`Loading plugin module from: ${config.pluginModulePath}`);
+    pluginModule = await loadPluginModule(config.pluginModulePath);
+  } else {
+    warning(
+      `Plugin module not found at ${config.pluginModulePath}. Run the build step first, or exports will not be available.`,
+    );
+  }
 
   // Log discovered exports
   const exportsSummary = {
@@ -288,24 +405,50 @@ async function main() {
   };
   console.log("Discovered exports:", JSON.stringify(exportsSummary));
 
+  // Extract SupportedEvents from TypeScript source as fallback for listeners
+  let supportedEvents = null;
+  if (pluginModule.pluginListeners === undefined) {
+    console.log(
+      "No pluginListeners export found. Scanning TypeScript source for SupportedEvents type...",
+    );
+    supportedEvents = await extractSupportedEvents(config.projectRoot);
+    if (supportedEvents) {
+      console.log(
+        `Extracted SupportedEvents: ${JSON.stringify(supportedEvents)}`,
+      );
+    } else {
+      console.log("No SupportedEvents type found in source files.");
+    }
+  }
+
   // Read consuming plugin's package.json
   let packageJson = null;
   try {
-    const pkgPath = path.resolve(githubWorkspace, "package.json");
+    const pkgPath = path.resolve(config.projectRoot, "package.json");
     packageJson = JSON.parse(await fs.readFile(pkgPath, "utf8"));
   } catch (error) {
     warning(`Could not read package.json: ${error.message}`);
   }
 
   // Read existing manifest
-  const existingManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  let existingManifest = {};
+  try {
+    existingManifest = JSON.parse(
+      await fs.readFile(config.manifestPath, "utf8"),
+    );
+  } catch (error) {
+    console.log(
+      `No existing manifest at ${config.manifestPath}, starting fresh.`,
+    );
+  }
 
   // Build the updated manifest
   const { manifest, warnings: buildWarnings } = buildManifest(
     existingManifest,
     pluginModule,
     packageJson,
-    { repository: githubRepository, refName: githubRefName },
+    { repository: config.repository, refName: config.refName },
+    { supportedEvents },
   );
 
   // Emit warnings
@@ -315,8 +458,8 @@ async function main() {
 
   // Write manifest
   const updatedManifest = JSON.stringify(manifest, null, 2);
-  await fs.writeFile(manifestPath, updatedManifest, "utf8");
-  console.log("Manifest updated successfully.");
+  await fs.writeFile(config.manifestPath, updatedManifest, "utf8");
+  console.log(`Manifest written to ${config.manifestPath}`);
 }
 
 // Export for testing
@@ -325,6 +468,7 @@ module.exports = {
   customReviver,
   validateCommands,
   validateListeners,
+  extractSupportedEvents,
   orderManifestFields,
 };
 

@@ -1,10 +1,14 @@
-const { describe, it } = require("node:test");
+const { describe, it, before, after } = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
 const {
   buildManifest,
   customReviver,
   validateCommands,
   validateListeners,
+  extractSupportedEvents,
   orderManifestFields,
 } = require("../update-manifest.js");
 
@@ -88,9 +92,15 @@ describe("buildManifest", () => {
     assert.deepEqual(manifest.commands, {
       old: { description: "old", "ubiquity:example": "/old" },
     });
-    // Warnings about missing pluginCommands, pluginListeners, pluginSkipBotEvents
+    // Warnings about missing pluginCommands, listeners, pluginSkipBotEvents
     assert.ok(warnings.some((w) => w.includes("pluginCommands")));
-    assert.ok(warnings.some((w) => w.includes("pluginListeners")));
+    assert.ok(
+      warnings.some(
+        (w) =>
+          w.includes("ubiquity:listeners") &&
+          w.includes("not be auto-generated"),
+      ),
+    );
     assert.ok(warnings.some((w) => w.includes("pluginSkipBotEvents")));
   });
 
@@ -589,5 +599,205 @@ describe("orderManifestFields", () => {
     const keys = Object.keys(ordered);
 
     assert.deepEqual(keys, ["short_name"]);
+  });
+});
+
+describe("buildManifest with supportedEvents fallback", () => {
+  it("uses supportedEvents when pluginListeners export is absent", () => {
+    const existingManifest = {};
+    const pluginModule = {};
+    const supportedEvents = ["issue_comment.created", "pull_request.opened"];
+
+    const { manifest, warnings } = buildManifest(
+      existingManifest,
+      pluginModule,
+      null,
+      REPO_INFO,
+      { supportedEvents },
+    );
+
+    assert.deepEqual(manifest["ubiquity:listeners"], [
+      "issue_comment.created",
+      "pull_request.opened",
+    ]);
+    // No warning about missing listeners
+    assert.ok(
+      !warnings.some(
+        (w) =>
+          w.includes("ubiquity:listeners") &&
+          w.includes("not be auto-generated"),
+      ),
+    );
+  });
+
+  it("prefers pluginListeners export over supportedEvents", () => {
+    const existingManifest = {};
+    const pluginModule = {
+      pluginListeners: ["issues.labeled"],
+    };
+    const supportedEvents = ["issue_comment.created", "pull_request.opened"];
+
+    const { manifest } = buildManifest(
+      existingManifest,
+      pluginModule,
+      null,
+      REPO_INFO,
+      { supportedEvents },
+    );
+
+    // pluginListeners takes priority
+    assert.deepEqual(manifest["ubiquity:listeners"], ["issues.labeled"]);
+  });
+
+  it("warns when supportedEvents has invalid entries", () => {
+    const existingManifest = {};
+    const pluginModule = {};
+    const supportedEvents = ["push"]; // invalid: no dot
+
+    const { manifest, warnings } = buildManifest(
+      existingManifest,
+      pluginModule,
+      null,
+      REPO_INFO,
+      { supportedEvents },
+    );
+
+    assert.equal(manifest["ubiquity:listeners"], undefined);
+    assert.ok(
+      warnings.some(
+        (w) =>
+          w.includes("ubiquity:listeners") &&
+          w.includes("SupportedEvents type found but invalid"),
+      ),
+    );
+  });
+
+  it("warns when neither pluginListeners nor supportedEvents is available", () => {
+    const existingManifest = {};
+    const pluginModule = {};
+
+    const { warnings } = buildManifest(
+      existingManifest,
+      pluginModule,
+      null,
+      REPO_INFO,
+      { supportedEvents: null },
+    );
+
+    assert.ok(
+      warnings.some(
+        (w) =>
+          w.includes("ubiquity:listeners") &&
+          w.includes("not be auto-generated"),
+      ),
+    );
+  });
+});
+
+describe("extractSupportedEvents", () => {
+  let tmpDir;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "manifest-test-"));
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("extracts events from a SupportedEvents type definition", async () => {
+    const srcDir = path.join(tmpDir, "extract-basic", "src", "types");
+    fs.mkdirSync(srcDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(srcDir, "context.ts"),
+      `import { Context as PluginContext } from "@ubiquity-os/plugin-sdk";
+export type SupportedEvents = "issue_comment.created" | "pull_request.opened" | "issues.unassigned";
+export type Context = PluginContext<SupportedEvents>;
+`,
+    );
+
+    const result = await extractSupportedEvents(
+      path.join(tmpDir, "extract-basic"),
+    );
+    assert.deepEqual(result, [
+      "issue_comment.created",
+      "pull_request.opened",
+      "issues.unassigned",
+    ]);
+  });
+
+  it("extracts events with single quotes", async () => {
+    const srcDir = path.join(tmpDir, "extract-single-quotes", "src");
+    fs.mkdirSync(srcDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(srcDir, "context.ts"),
+      `export type SupportedEvents = 'issues.opened' | 'issues.closed';
+`,
+    );
+
+    const result = await extractSupportedEvents(
+      path.join(tmpDir, "extract-single-quotes"),
+    );
+    assert.deepEqual(result, ["issues.opened", "issues.closed"]);
+  });
+
+  it("handles non-exported SupportedEvents type", async () => {
+    const srcDir = path.join(tmpDir, "extract-non-export", "src");
+    fs.mkdirSync(srcDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(srcDir, "context.ts"),
+      `type SupportedEvents = "issue_comment.created" | "issues.labeled";
+`,
+    );
+
+    const result = await extractSupportedEvents(
+      path.join(tmpDir, "extract-non-export"),
+    );
+    assert.deepEqual(result, ["issue_comment.created", "issues.labeled"]);
+  });
+
+  it("returns null when no SupportedEvents type exists", async () => {
+    const srcDir = path.join(tmpDir, "extract-none", "src");
+    fs.mkdirSync(srcDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(srcDir, "context.ts"),
+      `export type Context = { eventName: string };
+`,
+    );
+
+    const result = await extractSupportedEvents(
+      path.join(tmpDir, "extract-none"),
+    );
+    assert.equal(result, null);
+  });
+
+  it("returns null when src directory does not exist", async () => {
+    const projectDir = path.join(tmpDir, "extract-no-src");
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    const result = await extractSupportedEvents(projectDir);
+    assert.equal(result, null);
+  });
+
+  it("handles multiline SupportedEvents type", async () => {
+    const srcDir = path.join(tmpDir, "extract-multiline", "src");
+    fs.mkdirSync(srcDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(srcDir, "context.ts"),
+      `export type SupportedEvents =
+  | "issue_comment.created"
+  | "pull_request.opened"
+  | "issues.labeled";
+`,
+    );
+
+    const result = await extractSupportedEvents(
+      path.join(tmpDir, "extract-multiline"),
+    );
+    assert.deepEqual(result, [
+      "issue_comment.created",
+      "pull_request.opened",
+      "issues.labeled",
+    ]);
   });
 });

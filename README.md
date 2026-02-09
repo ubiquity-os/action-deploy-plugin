@@ -118,7 +118,7 @@ The action auto-generates `manifest.json` fields from code exports and `package.
 | `name` | `package.json` | — |
 | `description` | `package.json` | — |
 | `commands` | Schema module export | `pluginCommands` |
-| `ubiquity:listeners` | Schema module export | `pluginListeners` |
+| `ubiquity:listeners` | Schema module export or `SupportedEvents` type | `pluginListeners` |
 | `skipBotEvents` | Schema module export | `pluginSkipBotEvents` |
 | `configuration` | Schema module export | `pluginSettingsSchema` |
 | `short_name` | Auto (`owner/repo@ref`) | — |
@@ -156,6 +156,30 @@ export const pluginSkipBotEvents = true;
 
 export type PluginSettings = StaticDecode<typeof pluginSettingsSchema>;
 ```
+
+### SupportedEvents Type Extraction
+
+If `pluginListeners` is not exported, the action will scan TypeScript source files in `src/` for a `SupportedEvents` type alias and extract the webhook event names automatically:
+
+```typescript
+// src/types/context.ts
+export type SupportedEvents =
+  | "issue_comment.created"
+  | "pull_request.opened"
+  | "issues.unassigned";
+```
+
+The string literals from the union type are extracted and used as `ubiquity:listeners`. This is a fallback — if `pluginListeners` is exported, it takes priority.
+
+### Local Testing
+
+You can run the manifest generation locally against any plugin project:
+
+```bash
+node .github/scripts/update-manifest.js /path/to/your-plugin
+```
+
+This reads the project's `manifest.json`, `package.json`, `plugin/index.js` (if built), and `src/` directory (for `SupportedEvents`), then writes the updated manifest. No environment variables needed.
 
 ### Backward Compatibility
 
