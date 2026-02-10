@@ -1,7 +1,6 @@
 const fs = require("fs").promises;
 const fsSync = require("fs");
 const path = require("path");
-const { glob } = require("glob");
 const { execFile } = require("child_process");
 const { promisify } = require("util");
 const { pathToFileURL } = require("url");
@@ -15,6 +14,47 @@ const MANIFEST_EXPORT_KEYS = [
 ];
 
 const DENO_OUTPUT_PREFIX = "__CODEX_MANIFEST_EXPORTS__";
+
+/**
+ * Recursively lists files under a directory.
+ *
+ * @param {string} rootDir
+ * @returns {Promise<string[]>}
+ */
+async function listFilesRecursive(rootDir) {
+  let entries;
+  try {
+    entries = await fs.readdir(rootDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const files = [];
+  for (const entry of entries) {
+    const fullPath = path.join(rootDir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await listFilesRecursive(fullPath)));
+    } else if (entry.isFile()) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+/**
+ * Recursively finds files with a specific extension.
+ *
+ * @param {string} rootDir
+ * @param {string} extension
+ * @returns {Promise<string[]>}
+ */
+async function findFilesByExtension(rootDir, extension) {
+  const lowerExt = extension.toLowerCase();
+  const files = await listFilesRecursive(rootDir);
+  return files
+    .filter((file) => file.toLowerCase().endsWith(lowerExt))
+    .sort((a, b) => a.localeCompare(b));
+}
 
 /**
  * Emits a GitHub Actions warning annotation.
@@ -341,7 +381,7 @@ async function extractSupportedEvents(projectRoot) {
     return null;
   }
 
-  const tsFiles = await glob("**/*.ts", { cwd: srcDir, absolute: true });
+  const tsFiles = await findFilesByExtension(srcDir, ".ts");
 
   for (const file of tsFiles) {
     const content = await fs.readFile(file, "utf8");
@@ -675,10 +715,7 @@ async function resolvePluginModulePath(configuredPath, projectRoot) {
   // Last-resort scan for compiled JS in dist that appears to export schema symbols.
   const distDir = path.join(projectRoot, "dist");
   if (fsSync.existsSync(distDir)) {
-    const distJsFiles = await glob("**/*.js", {
-      cwd: distDir,
-      absolute: true,
-    });
+    const distJsFiles = await findFilesByExtension(distDir, ".js");
 
     for (const file of distJsFiles) {
       let content = "";
@@ -718,7 +755,7 @@ async function findSourceSchemaCandidateFiles(projectRoot) {
     return [];
   }
 
-  const tsFiles = await glob("**/*.ts", { cwd: typesDir, absolute: true });
+  const tsFiles = await findFilesByExtension(typesDir, ".ts");
   const declarationRegex =
     /\bexport\s+(?:const|let|var)\s+(pluginSettingsSchema|commandSchema|pluginSkipBotEvents)\b/;
   const reexportRegex =
