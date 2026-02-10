@@ -515,7 +515,7 @@ function buildManifest(
     );
   }
 
-  // --- short_name (unchanged behavior) ---
+  // --- short_name (always derived from repository/ref for deterministic identity) ---
   manifest["short_name"] = `${repoInfo.repository}@${repoInfo.refName}`;
 
   // --- description (from package.json) ---
@@ -596,7 +596,7 @@ function buildManifest(
     warnings.push(normalizedSkipBotEvents.warning);
   }
 
-  // --- configuration (from pluginSettingsSchema export, unchanged behavior) ---
+  // --- configuration (generated from pluginSettingsSchema with default-aware required cleanup) ---
   const pluginSettingsSchema = pluginModule.pluginSettingsSchema;
   if (pluginSettingsSchema) {
     // Apply customReviver only to the configuration subtree
