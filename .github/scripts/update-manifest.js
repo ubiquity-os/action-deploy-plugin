@@ -10,7 +10,6 @@ const execFileAsync = promisify(execFile);
 const MANIFEST_EXPORT_KEYS = [
   "pluginSettingsSchema",
   "commandSchema",
-  "pluginSkipBotEvents",
 ];
 
 const DENO_OUTPUT_PREFIX = "__CODEX_MANIFEST_EXPORTS__";
@@ -61,6 +60,40 @@ async function findFilesByExtension(rootDir, extension) {
  */
 function warning(message) {
   console.log(`::warning::${message}`);
+}
+
+/**
+ * Normalizes a skipBotEvents input value to a boolean.
+ *
+ * Accepts booleans directly and string values "true"/"false" (case-insensitive).
+ * Any missing or invalid value falls back to true.
+ *
+ * @param {unknown} value
+ * @returns {{ value: boolean, warning: string|null }}
+ */
+function normalizeSkipBotEvents(value) {
+  if (typeof value === "boolean") {
+    return { value, warning: null };
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") {
+      return { value: true, warning: null };
+    }
+    if (normalized === "false") {
+      return { value: false, warning: null };
+    }
+
+    if (normalized.length > 0) {
+      return {
+        value: true,
+        warning: `manifest.skipBotEvents: invalid action input value "${value}" (expected "true" or "false"). Defaulting to true.`,
+      };
+    }
+  }
+
+  return { value: true, warning: null };
 }
 
 /**
@@ -452,6 +485,7 @@ function orderManifestFields(manifest) {
  * @param {object} repoInfo - { repository: string, refName: string }
  * @param {object} [options] - Additional options
  * @param {string[]|null} [options.supportedEvents] - Events extracted from SupportedEvents type
+ * @param {boolean|string} [options.skipBotEvents] - Action input override for skipBotEvents
  * @returns {{ manifest: object, warnings: string[] }}
  */
 function buildManifest(
@@ -555,21 +589,11 @@ function buildManifest(
     );
   }
 
-  // --- skipBotEvents (from pluginSkipBotEvents export) ---
-  const pluginSkipBotEvents = pluginModule.pluginSkipBotEvents;
-  if (pluginSkipBotEvents !== undefined && pluginSkipBotEvents !== null) {
-    if (typeof pluginSkipBotEvents === "boolean") {
-      manifest["skipBotEvents"] = pluginSkipBotEvents;
-    } else {
-      warnings.push(
-        `manifest.skipBotEvents: pluginSkipBotEvents export has invalid type "${typeof pluginSkipBotEvents}" (expected boolean). Skipping.`,
-      );
-    }
-  } else {
-    warnings.push(
-      'manifest.skipBotEvents: no "pluginSkipBotEvents" export found in schema module. Defaulting to true.',
-    );
-    manifest["skipBotEvents"] = true;
+  // --- skipBotEvents (from action input, default true) ---
+  const normalizedSkipBotEvents = normalizeSkipBotEvents(options.skipBotEvents);
+  manifest["skipBotEvents"] = normalizedSkipBotEvents.value;
+  if (normalizedSkipBotEvents.warning) {
+    warnings.push(normalizedSkipBotEvents.warning);
   }
 
   // --- configuration (from pluginSettingsSchema export, unchanged behavior) ---
@@ -757,9 +781,9 @@ async function findSourceSchemaCandidateFiles(projectRoot) {
 
   const tsFiles = await findFilesByExtension(typesDir, ".ts");
   const declarationRegex =
-    /\bexport\s+(?:const|let|var)\s+(pluginSettingsSchema|commandSchema|pluginSkipBotEvents)\b/;
+    /\bexport\s+(?:const|let|var)\s+(pluginSettingsSchema|commandSchema)\b/;
   const reexportRegex =
-    /\bexport\s*{[^}]*\b(pluginSettingsSchema|commandSchema|pluginSkipBotEvents)\b[^}]*}/;
+    /\bexport\s*{[^}]*\b(pluginSettingsSchema|commandSchema)\b[^}]*}/;
 
   const candidates = [];
   for (const file of tsFiles) {
@@ -855,6 +879,7 @@ async function formatManifestWithPrettier(manifestPath, cwd) {
  * This will:
  *   - Use the project's manifest.json, package.json, and src/ directory
  *   - Load schema exports directly from source TypeScript modules under src/types/
+ *   - Use skipBotEvents=true by default
  *   - Use "local/project@local" as the short_name
  */
 function resolveConfig() {
@@ -867,6 +892,7 @@ function resolveConfig() {
       projectRoot,
       repository: `local/${path.basename(projectRoot)}`,
       refName: "local",
+      skipBotEvents: true,
     };
   }
 
@@ -874,6 +900,7 @@ function resolveConfig() {
   const projectRoot = process.env.GITHUB_WORKSPACE;
   const repository = process.env.GITHUB_REPOSITORY;
   const refName = process.env.GITHUB_REF_NAME;
+  const skipBotEvents = process.env.SKIP_BOT_EVENTS ?? "true";
 
   if (!manifestPath || !projectRoot || !repository || !refName) {
     console.error(
@@ -885,7 +912,7 @@ function resolveConfig() {
     process.exit(1);
   }
 
-  return { manifestPath, projectRoot, repository, refName };
+  return { manifestPath, projectRoot, repository, refName, skipBotEvents };
 }
 
 /**
@@ -917,7 +944,6 @@ async function main() {
   const exportsSummary = {
     pluginSettingsSchema: !!pluginModule.pluginSettingsSchema,
     commandSchema: pluginModule.commandSchema !== undefined,
-    pluginSkipBotEvents: pluginModule.pluginSkipBotEvents !== undefined,
   };
   console.log("Discovered exports:", JSON.stringify(exportsSummary));
 
@@ -957,7 +983,7 @@ async function main() {
     pluginModule,
     packageJson,
     { repository: config.repository, refName: config.refName },
-    { supportedEvents },
+    { supportedEvents, skipBotEvents: config.skipBotEvents },
   );
 
   // Emit warnings
@@ -988,6 +1014,7 @@ module.exports = {
   pickManifestExports,
   parseDenoLoaderOutput,
   ensureNodeDenoShim,
+  normalizeSkipBotEvents,
 };
 
 // Run main when executed directly

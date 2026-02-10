@@ -88,12 +88,12 @@ Integration testing is done at the GitHub Actions workflow level by consuming re
 - Manifest generation extracts metadata from source TypeScript modules:
   - `pluginSettingsSchema` → `manifest.configuration`
   - `commandSchema` → `manifest.commands` (`commandSchema` may be a commands map or a TypeBox union)
-  - `pluginSkipBotEvents` → `manifest.skipBotEvents`
+- Manifest generation sets `manifest.skipBotEvents` from the action input `skipBotEvents` (default `true`)
 - Schema module loading is Deno-first with Node fallbacks (including a lightweight Deno shim in Node)
 - Source schema exports are loaded from `src/types/*.ts` modules
 - The action scans TypeScript source for a `SupportedEvents` type alias and extracts the string literal union members as `manifest["ubiquity:listeners"]`
 - `name` and `description` are read from the consuming plugin's `package.json`
-- Missing exports emit warnings but do not fail the build (backward compatible); when `pluginSkipBotEvents` is missing, `skipBotEvents` defaults to `true`
+- Missing exports emit warnings but do not fail the build (backward compatible); `skipBotEvents` always comes from action input/default
 - Manifest field ordering is deterministic to avoid noisy diffs
 - Local testing: `node .github/scripts/update-manifest.js /path/to/plugin-project`
 

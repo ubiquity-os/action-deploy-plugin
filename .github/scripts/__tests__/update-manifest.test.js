@@ -16,6 +16,7 @@ const {
   pickManifestExports,
   parseDenoLoaderOutput,
   ensureNodeDenoShim,
+  normalizeSkipBotEvents,
 } = require("../update-manifest.js");
 
 const REPO_INFO = { repository: "ubiquity-os/test-plugin", refName: "main" };
@@ -35,7 +36,6 @@ describe("buildManifest", () => {
           "ubiquity:example": "/hello world",
         },
       },
-      pluginSkipBotEvents: true,
     };
     const supportedEvents = ["issue_comment.created", "issues.labeled"];
     const packageJson = {
@@ -94,9 +94,9 @@ describe("buildManifest", () => {
     assert.deepEqual(manifest.commands, {
       old: { description: "old", "ubiquity:example": "/old" },
     });
-    // skipBotEvents defaults to true when pluginSkipBotEvents is not exported
+    // skipBotEvents defaults to true from action input defaults
     assert.equal(manifest.skipBotEvents, true);
-    // Warnings about missing commandSchema, SupportedEvents, pluginSkipBotEvents
+    // Warnings about missing commandSchema and SupportedEvents
     assert.ok(warnings.some((w) => w.includes("commandSchema")));
     assert.ok(
       warnings.some(
@@ -105,7 +105,6 @@ describe("buildManifest", () => {
           w.includes("not be auto-generated"),
       ),
     );
-    assert.ok(warnings.some((w) => w.includes("pluginSkipBotEvents")));
   });
 
   it("preserves existing manifest name when package.json has no name", () => {
@@ -498,23 +497,24 @@ describe("buildManifest", () => {
     );
   });
 
-  it("skips skipBotEvents with invalid type (string)", () => {
+  it("defaults skipBotEvents to true when action input is invalid", () => {
     const existingManifest = {};
-    const pluginModule = { pluginSkipBotEvents: "yes" };
+    const pluginModule = {};
 
     const { manifest, warnings } = buildManifest(
       existingManifest,
       pluginModule,
       null,
       REPO_INFO,
+      { skipBotEvents: "yes" },
     );
 
-    assert.equal(manifest.skipBotEvents, undefined);
+    assert.equal(manifest.skipBotEvents, true);
     assert.ok(
       warnings.some(
         (w) =>
           w.includes("manifest.skipBotEvents") &&
-          w.includes("expected boolean"),
+          w.includes("invalid action input value"),
       ),
     );
   });
@@ -600,13 +600,14 @@ describe("buildManifest", () => {
 
   it("handles skipBotEvents=false correctly", () => {
     const existingManifest = {};
-    const pluginModule = { pluginSkipBotEvents: false };
+    const pluginModule = {};
 
     const { manifest, warnings } = buildManifest(
       existingManifest,
       pluginModule,
       null,
       REPO_INFO,
+      { skipBotEvents: false },
     );
 
     assert.equal(manifest.skipBotEvents, false);
@@ -1255,6 +1256,26 @@ describe("parseDenoLoaderOutput", () => {
     assert.throws(() =>
       parseDenoLoaderOutput("__CODEX_MANIFEST_EXPORTS__{not-json}"),
     );
+  });
+});
+
+describe("normalizeSkipBotEvents", () => {
+  it("returns true when input is undefined", () => {
+    const normalized = normalizeSkipBotEvents(undefined);
+    assert.equal(normalized.value, true);
+    assert.equal(normalized.warning, null);
+  });
+
+  it("parses string false", () => {
+    const normalized = normalizeSkipBotEvents("false");
+    assert.equal(normalized.value, false);
+    assert.equal(normalized.warning, null);
+  });
+
+  it("warns and defaults to true for invalid strings", () => {
+    const normalized = normalizeSkipBotEvents("not-a-boolean");
+    assert.equal(normalized.value, true);
+    assert.ok(normalized.warning?.includes("invalid action input value"));
   });
 });
 

@@ -44,6 +44,11 @@ This GitHub Action automates the process of checking out a repository, setting u
     - **Description**: Generates the sourcemap for the compiled files.
     - **Default**: `false`
 
+- **`skipBotEvents`**:
+    - **Description**: Sets `manifest.skipBotEvents` (`true` or `false`).
+    - **Required**: No
+    - **Default**: `true`
+
 ## Steps
 
 1. **Check out the repository**:
@@ -122,7 +127,7 @@ The action auto-generates `manifest.json` fields from code exports and `package.
 | `description` | `package.json` | — |
 | `commands` | Source TypeScript schema export | `commandSchema` |
 | `ubiquity:listeners` | Source TypeScript type alias | `SupportedEvents` |
-| `skipBotEvents` | Schema module export | `pluginSkipBotEvents` |
+| `skipBotEvents` | Action input | `skipBotEvents` |
 | `configuration` | Schema module export | `pluginSettingsSchema` |
 | `short_name` | Auto (`owner/repo@ref`) | — |
 | `homepage_url` | Preserved from existing manifest | — |
@@ -147,9 +152,6 @@ export const commandSchema = {
     "ubiquity:example": "/hello world",
   },
 };
-
-// Whether to skip bot-triggered events (used for manifest.skipBotEvents)
-export const pluginSkipBotEvents = true;
 
 export type PluginSettings = StaticDecode<typeof pluginSettingsSchema>;
 ```
@@ -186,7 +188,7 @@ This reads the project's `manifest.json`, `package.json`, and source TypeScript 
 
 All new exports are optional. If an export is missing, the action will:
 
-- Preserve any existing value in `manifest.json` (except `skipBotEvents`, which defaults to `true` when `pluginSkipBotEvents` is missing)
+- Preserve any existing value in `manifest.json` when source data is missing (except `skipBotEvents`, which is always set from action input and defaults to `true`)
 - Emit a warning in the CI log
 
 Plugins that only export `pluginSettingsSchema` will continue to work exactly as before.
