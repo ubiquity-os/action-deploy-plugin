@@ -2,12 +2,114 @@ const fs = require("fs").promises;
 const fsSync = require("fs");
 const path = require("path");
 const { glob } = require("glob");
+const { execFile } = require("child_process");
+const { promisify } = require("util");
+const { pathToFileURL } = require("url");
+
+const execFileAsync = promisify(execFile);
+
+const MANIFEST_EXPORT_KEYS = [
+  "pluginSettingsSchema",
+  "commandSchema",
+  "pluginSkipBotEvents",
+];
+
+const DENO_OUTPUT_PREFIX = "__CODEX_MANIFEST_EXPORTS__";
 
 /**
  * Emits a GitHub Actions warning annotation.
  */
 function warning(message) {
   console.log(`::warning::${message}`);
+}
+
+/**
+ * Picks only manifest-relevant exports from a loaded module.
+ * Supports both named exports and default-exported objects.
+ */
+function pickManifestExports(moduleValue) {
+  if (!moduleValue || typeof moduleValue !== "object") {
+    return {};
+  }
+
+  const hasNamedExports = MANIFEST_EXPORT_KEYS.some((key) =>
+    Object.prototype.hasOwnProperty.call(moduleValue, key),
+  );
+
+  const candidate =
+    hasNamedExports ||
+    !moduleValue.default ||
+    typeof moduleValue.default !== "object"
+      ? moduleValue
+      : moduleValue.default;
+
+  const picked = {};
+  for (const key of MANIFEST_EXPORT_KEYS) {
+    if (
+      Object.prototype.hasOwnProperty.call(candidate, key) &&
+      candidate[key] !== undefined
+    ) {
+      picked[key] = candidate[key];
+    }
+  }
+  return picked;
+}
+
+/**
+ * Parses Deno loader stdout and extracts the exported module payload.
+ */
+function parseDenoLoaderOutput(stdout) {
+  const lines = String(stdout || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    const markerIndex = line.indexOf(DENO_OUTPUT_PREFIX);
+    if (markerIndex === -1) continue;
+
+    const payload = line.slice(markerIndex + DENO_OUTPUT_PREFIX.length);
+    try {
+      const parsed = JSON.parse(payload);
+      return pickManifestExports(parsed);
+    } catch (error) {
+      throw new Error(
+        `Invalid JSON payload from Deno loader: ${error.message}`,
+      );
+    }
+  }
+
+  throw new Error("No manifest export payload found in Deno loader output");
+}
+
+/**
+ * Injects a minimal Deno shim for Node runtime module loading.
+ * Returns true when the shim was injected by this function.
+ */
+function ensureNodeDenoShim() {
+  if (typeof globalThis.Deno !== "undefined") {
+    return false;
+  }
+
+  class NotFound extends Error {}
+
+  globalThis.Deno = {
+    env: {
+      get: (name) => process.env[name],
+      toObject: () => ({ ...process.env }),
+    },
+    cwd: () => process.cwd(),
+    build: {
+      os: process.platform,
+      arch: process.arch,
+    },
+    errors: {
+      NotFound,
+    },
+  };
+
+  return true;
 }
 
 /**
@@ -46,7 +148,7 @@ function customReviver(_key, value) {
 }
 
 /**
- * Validates that pluginCommands is a well-formed commands object.
+ * Validates that `commands` is a well-formed command map object.
  * Returns an error string if invalid, or null if valid.
  */
 function validateCommands(commands) {
@@ -55,7 +157,7 @@ function validateCommands(commands) {
     Array.isArray(commands) ||
     commands === null
   ) {
-    return "pluginCommands must be a plain object (Record<string, CommandSchema>)";
+    return "commands must be a plain object (Record<string, CommandSchema>)";
   }
   for (const [key, cmd] of Object.entries(commands)) {
     if (typeof cmd !== "object" || cmd === null) {
@@ -75,12 +177,142 @@ function validateCommands(commands) {
 }
 
 /**
- * Validates that pluginListeners is a well-formed listeners array.
+ * Attempts to convert a TypeBox-style command schema union into
+ * the manifest commands map format.
+ *
+ * Expected commandSchema shape (simplified):
+ * {
+ *   anyOf: [
+ *     { properties: { name: { const: "start", description, examples }, parameters: {...} } },
+ *     { properties: { name: { const: "stop", description, examples } } }
+ *   ]
+ * }
+ */
+function convertTypeBoxCommandSchema(commandSchema, existingCommands = {}) {
+  if (
+    typeof commandSchema !== "object" ||
+    commandSchema === null ||
+    Array.isArray(commandSchema)
+  ) {
+    return { commands: null, error: "commandSchema must be an object" };
+  }
+
+  const variants = Array.isArray(commandSchema.anyOf)
+    ? commandSchema.anyOf
+    : Array.isArray(commandSchema.oneOf)
+      ? commandSchema.oneOf
+      : null;
+
+  if (!variants || variants.length === 0) {
+    return {
+      commands: null,
+      error: "commandSchema is missing anyOf/oneOf command variants",
+    };
+  }
+
+  const commands = {};
+
+  for (const variant of variants) {
+    if (typeof variant !== "object" || variant === null) {
+      return {
+        commands: null,
+        error: "commandSchema variants must be objects",
+      };
+    }
+
+    const nameSchema = variant?.properties?.name;
+    let commandName = null;
+
+    if (typeof nameSchema?.const === "string" && nameSchema.const.trim()) {
+      commandName = nameSchema.const;
+    } else if (
+      Array.isArray(nameSchema?.enum) &&
+      nameSchema.enum.length === 1 &&
+      typeof nameSchema.enum[0] === "string" &&
+      nameSchema.enum[0].trim()
+    ) {
+      commandName = nameSchema.enum[0];
+    }
+
+    if (!commandName) {
+      return {
+        commands: null,
+        error:
+          'Each command variant must define a literal "name" (name.const or single-value name.enum)',
+      };
+    }
+
+    const existingCommand = existingCommands?.[commandName];
+    const description =
+      (typeof nameSchema?.description === "string" &&
+        nameSchema.description.trim()) ||
+      (typeof variant.description === "string" && variant.description.trim()) ||
+      (typeof existingCommand?.description === "string" &&
+        existingCommand.description.trim()) ||
+      commandName;
+
+    let example = null;
+    if (
+      typeof nameSchema?.["ubiquity:example"] === "string" &&
+      nameSchema["ubiquity:example"].trim()
+    ) {
+      example = nameSchema["ubiquity:example"];
+    } else if (
+      Array.isArray(nameSchema?.examples) &&
+      typeof nameSchema.examples[0] === "string" &&
+      nameSchema.examples[0].trim()
+    ) {
+      example = nameSchema.examples[0];
+    } else if (
+      typeof existingCommand?.["ubiquity:example"] === "string" &&
+      existingCommand["ubiquity:example"].trim()
+    ) {
+      example = existingCommand["ubiquity:example"];
+    } else {
+      example = `/${commandName}`;
+    }
+
+    const command = {
+      description,
+      "ubiquity:example": example,
+    };
+
+    const parameters = variant?.properties?.parameters;
+    if (
+      typeof parameters === "object" &&
+      parameters !== null &&
+      !Array.isArray(parameters)
+    ) {
+      command.parameters = parameters;
+    } else if (
+      typeof existingCommand?.parameters === "object" &&
+      existingCommand.parameters !== null &&
+      !Array.isArray(existingCommand.parameters)
+    ) {
+      command.parameters = existingCommand.parameters;
+    }
+
+    commands[commandName] = command;
+  }
+
+  const validationError = validateCommands(commands);
+  if (validationError) {
+    return {
+      commands: null,
+      error: `derived commands are invalid: ${validationError}`,
+    };
+  }
+
+  return { commands, error: null };
+}
+
+/**
+ * Validates that listeners is a well-formed listeners array.
  * Returns an error string if invalid, or null if valid.
  */
 function validateListeners(listeners) {
   if (!Array.isArray(listeners)) {
-    return "pluginListeners must be an array of webhook event strings";
+    return "listeners must be an array of webhook event strings";
   }
   for (const listener of listeners) {
     if (typeof listener !== "string" || !listener.includes(".")) {
@@ -229,34 +461,43 @@ function buildManifest(
     );
   }
 
-  // --- commands (from pluginCommands export) ---
-  const pluginCommands = pluginModule.pluginCommands;
-  if (pluginCommands !== undefined && pluginCommands !== null) {
-    const validationError = validateCommands(pluginCommands);
-    if (validationError) {
-      warnings.push(`manifest.commands: ${validationError}. Skipping.`);
+  // --- commands (from commandSchema export only) ---
+  const commandSchema = pluginModule.commandSchema;
+  if (commandSchema !== undefined && commandSchema !== null) {
+    const validationError = validateCommands(commandSchema);
+    if (!validationError) {
+      manifest["commands"] = commandSchema;
     } else {
-      manifest["commands"] = pluginCommands;
+      const looksLikeTypeBoxUnion =
+        typeof commandSchema === "object" &&
+        commandSchema !== null &&
+        (Array.isArray(commandSchema.anyOf) || Array.isArray(commandSchema.oneOf));
+
+      if (!looksLikeTypeBoxUnion) {
+        warnings.push(
+          `manifest.commands: commandSchema export is invalid (${validationError}). Skipping.`,
+        );
+      } else {
+        const { commands: convertedCommands, error: conversionError } =
+          convertTypeBoxCommandSchema(commandSchema, manifest["commands"]);
+        if (convertedCommands) {
+          manifest["commands"] = convertedCommands;
+        } else {
+          warnings.push(
+            `manifest.commands: commandSchema export found but could not be converted (${conversionError}). Skipping.`,
+          );
+        }
+      }
     }
   } else {
     warnings.push(
-      'manifest.commands: no "pluginCommands" export found in schema module. Field will not be auto-generated.',
+      'manifest.commands: no "commandSchema" export found in source schema modules. Field will not be auto-generated.',
     );
   }
 
-  // --- ubiquity:listeners (from pluginListeners export, fallback to SupportedEvents type) ---
-  const pluginListeners = pluginModule.pluginListeners;
+  // --- ubiquity:listeners (from SupportedEvents type only) ---
   const supportedEvents = options.supportedEvents;
-  if (pluginListeners !== undefined && pluginListeners !== null) {
-    const validationError = validateListeners(pluginListeners);
-    if (validationError) {
-      warnings.push(
-        `manifest["ubiquity:listeners"]: ${validationError}. Skipping.`,
-      );
-    } else {
-      manifest["ubiquity:listeners"] = pluginListeners;
-    }
-  } else if (supportedEvents !== undefined && supportedEvents !== null) {
+  if (supportedEvents !== undefined && supportedEvents !== null) {
     const validationError = validateListeners(supportedEvents);
     if (validationError) {
       warnings.push(
@@ -270,7 +511,7 @@ function buildManifest(
     }
   } else {
     warnings.push(
-      'manifest["ubiquity:listeners"]: no "pluginListeners" export or SupportedEvents type found. Field will not be auto-generated.',
+      'manifest["ubiquity:listeners"]: no SupportedEvents type found in source TypeScript modules. Field will not be auto-generated.',
     );
   }
 
@@ -286,8 +527,9 @@ function buildManifest(
     }
   } else {
     warnings.push(
-      'manifest.skipBotEvents: no "pluginSkipBotEvents" export found in schema module. Field will not be auto-generated.',
+      'manifest.skipBotEvents: no "pluginSkipBotEvents" export found in schema module. Defaulting to true.',
     );
+    manifest["skipBotEvents"] = true;
   }
 
   // --- configuration (from pluginSettingsSchema export, unchanged behavior) ---
@@ -310,20 +552,260 @@ function buildManifest(
 }
 
 /**
- * Loads the compiled schema module using ESM-first, CJS-fallback.
+ * Loads a schema module using Deno-first, then Node ESM/CJS fallbacks.
  */
 async function loadPluginModule(modulePath) {
+  const loadErrors = [];
+
+  // Deno-first: handles modules that reference Deno globals at module scope.
   try {
-    const pluginModule = await import(`file://${modulePath}`);
-    return pluginModule;
+    const moduleUrl = pathToFileURL(modulePath).href;
+    const script = `
+const moduleUrl = ${JSON.stringify(moduleUrl)};
+const keys = ${JSON.stringify(MANIFEST_EXPORT_KEYS)};
+const loaded = await import(moduleUrl);
+const hasNamed = keys.some((key) =>
+  Object.prototype.hasOwnProperty.call(loaded, key)
+);
+const source =
+  hasNamed || !loaded.default || typeof loaded.default !== "object"
+    ? loaded
+    : loaded.default;
+
+const out = {};
+for (const key of keys) {
+  if (Object.prototype.hasOwnProperty.call(source, key) && source[key] !== undefined) {
+    out[key] = source[key];
+  }
+}
+console.log(${JSON.stringify(DENO_OUTPUT_PREFIX)} + JSON.stringify(out));
+`;
+
+    const { stdout } = await execFileAsync(
+      "deno",
+      ["eval", "--quiet", script],
+      {
+        maxBuffer: 20 * 1024 * 1024,
+      },
+    );
+
+    return parseDenoLoaderOutput(stdout);
+  } catch (denoError) {
+    loadErrors.push({ runtime: "deno", error: denoError });
+  }
+
+  let injectedDenoShim = false;
+  try {
+    injectedDenoShim = ensureNodeDenoShim();
+    const pluginModule = await import(pathToFileURL(modulePath).href);
+    return pickManifestExports(pluginModule);
   } catch (esmError) {
+    loadErrors.push({
+      runtime: injectedDenoShim ? "node-esm+deno-shim" : "node-esm",
+      error: esmError,
+    });
     try {
       const pluginModule = require(modulePath);
-      return pluginModule;
+      return pickManifestExports(pluginModule);
     } catch (cjsError) {
-      console.error("Error loading module as ESM and CJS:", esmError, cjsError);
-      process.exit(1);
+      loadErrors.push({ runtime: "node-cjs", error: cjsError });
+      const details = loadErrors
+        .map(({ runtime, error }) => {
+          const message = error && error.message ? error.message : String(error);
+          return `[${runtime}] ${message}`;
+        })
+        .join("\n");
+      throw new Error(`Error loading module from ${modulePath}:\n${details}`);
     }
+  } finally {
+    if (injectedDenoShim) {
+      delete globalThis.Deno;
+    }
+  }
+}
+
+/**
+ * Resolves the compiled schema module path.
+ *
+ * Priority:
+ * 1) Configured path (PLUGIN_MODULE_PATH)
+ * 2) Conventional fallbacks
+ * 3) Dist scan for files that appear to export manifest schema symbols
+ *
+ * @param {string|null} configuredPath
+ * @param {string} projectRoot
+ * @returns {Promise<{resolvedPath: string|null, checkedPaths: string[], candidatePaths: string[]}>}
+ */
+async function resolvePluginModulePath(configuredPath, projectRoot) {
+  const candidates = [
+    configuredPath,
+    path.join(projectRoot, "plugin", "index.js"),
+    path.join(projectRoot, "dist", "plugin", "index.js"),
+    path.join(projectRoot, "dist", "index.js"),
+  ]
+    .filter(Boolean)
+    .map((p) => path.resolve(p));
+
+  const checkedPaths = [...new Set(candidates)];
+  const configuredCandidate = checkedPaths[0];
+  const candidatePaths = [];
+
+  // If an explicit path was configured, trust it.
+  if (configuredCandidate && fsSync.existsSync(configuredCandidate)) {
+    candidatePaths.push(configuredCandidate);
+  }
+
+  // Fallback candidates should look like schema bundles (contain known export names).
+  for (const candidate of checkedPaths.slice(1)) {
+    if (!fsSync.existsSync(candidate)) continue;
+    let content = "";
+    try {
+      content = await fs.readFile(candidate, "utf8");
+    } catch {
+      continue;
+    }
+    if (
+      content.includes("pluginSettingsSchema") ||
+      content.includes("commandSchema")
+    ) {
+      candidatePaths.push(candidate);
+    }
+  }
+
+  // Last-resort scan for compiled JS in dist that appears to export schema symbols.
+  const distDir = path.join(projectRoot, "dist");
+  if (fsSync.existsSync(distDir)) {
+    const distJsFiles = await glob("**/*.js", {
+      cwd: distDir,
+      absolute: true,
+    });
+
+    for (const file of distJsFiles) {
+      let content = "";
+      try {
+        content = await fs.readFile(file, "utf8");
+      } catch {
+        continue;
+      }
+
+      if (
+        content.includes("pluginSettingsSchema") ||
+        content.includes("commandSchema")
+      ) {
+        candidatePaths.push(file);
+      }
+    }
+  }
+
+  const uniqueCandidates = [...new Set(candidatePaths)];
+  const checkedWithCandidates = [...new Set([...checkedPaths, ...uniqueCandidates])];
+  return {
+    resolvedPath: uniqueCandidates[0] || null,
+    checkedPaths: checkedWithCandidates,
+    candidatePaths: uniqueCandidates,
+  };
+}
+
+/**
+ * Finds TypeScript files under src/types that likely export manifest schema symbols.
+ *
+ * @param {string} projectRoot
+ * @returns {Promise<string[]>}
+ */
+async function findSourceSchemaCandidateFiles(projectRoot) {
+  const typesDir = path.join(projectRoot, "src", "types");
+  if (!fsSync.existsSync(typesDir)) {
+    return [];
+  }
+
+  const tsFiles = await glob("**/*.ts", { cwd: typesDir, absolute: true });
+  const declarationRegex =
+    /\bexport\s+(?:const|let|var)\s+(pluginSettingsSchema|commandSchema|pluginSkipBotEvents)\b/;
+  const reexportRegex =
+    /\bexport\s*{[^}]*\b(pluginSettingsSchema|commandSchema|pluginSkipBotEvents)\b[^}]*}/;
+
+  const candidates = [];
+  for (const file of tsFiles) {
+    let content = "";
+    try {
+      content = await fs.readFile(file, "utf8");
+    } catch {
+      continue;
+    }
+
+    if (declarationRegex.test(content) || reexportRegex.test(content)) {
+      candidates.push(file);
+    }
+  }
+
+  // Prefer plugin-input entrypoints first.
+  const priority = (filePath) => {
+    const base = path.basename(filePath);
+    if (base === "plugin-input.ts") return 0;
+    if (base === "schema.ts") return 1;
+    if (base === "index.ts") return 2;
+    return 3;
+  };
+
+  return candidates.sort((a, b) => {
+    const pa = priority(a);
+    const pb = priority(b);
+    if (pa !== pb) return pa - pb;
+    return a.localeCompare(b);
+  });
+}
+
+/**
+ * Loads manifest exports from TypeScript source schema modules.
+ *
+ * @param {string} projectRoot
+ * @returns {Promise<{exports: object, candidateFiles: string[], loadedFiles: string[], errors: string[]}>}
+ */
+async function loadSourceSchemaExports(projectRoot) {
+  const candidateFiles = await findSourceSchemaCandidateFiles(projectRoot);
+  const mergedExports = {};
+  const loadedFiles = [];
+  const errors = [];
+
+  for (const file of candidateFiles) {
+    try {
+      const loaded = await loadPluginModule(file);
+      let added = false;
+      for (const key of MANIFEST_EXPORT_KEYS) {
+        if (mergedExports[key] === undefined && loaded[key] !== undefined) {
+          mergedExports[key] = loaded[key];
+          added = true;
+        }
+      }
+      if (added) {
+        loadedFiles.push(file);
+      }
+    } catch (error) {
+      errors.push(`${file}: ${error.message || String(error)}`);
+    }
+  }
+
+  return { exports: mergedExports, candidateFiles, loadedFiles, errors };
+}
+
+/**
+ * Formats manifest.json with Prettier.
+ * Best-effort only: emits a warning if Prettier is unavailable.
+ */
+async function formatManifestWithPrettier(manifestPath, cwd) {
+  const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
+  try {
+    await execFileAsync(
+      npxCommand,
+      ["--yes", "prettier", "--write", manifestPath],
+      { cwd, maxBuffer: 20 * 1024 * 1024 },
+    );
+    return true;
+  } catch (error) {
+    warning(
+      `Could not format manifest with Prettier: ${error.message || String(error)}`,
+    );
+    return false;
   }
 }
 
@@ -335,7 +817,7 @@ async function loadPluginModule(modulePath) {
  *
  * This will:
  *   - Use the project's manifest.json, package.json, and src/ directory
- *   - Attempt to load the compiled schema from plugin/index.js
+ *   - Load schema exports directly from source TypeScript modules under src/types/
  *   - Use "local/project@local" as the short_name
  */
 function resolveConfig() {
@@ -345,7 +827,6 @@ function resolveConfig() {
     const projectRoot = path.resolve(localProjectRoot);
     return {
       manifestPath: path.join(projectRoot, "manifest.json"),
-      pluginModulePath: path.join(projectRoot, "plugin", "index.js"),
       projectRoot,
       repository: `local/${path.basename(projectRoot)}`,
       refName: "local",
@@ -353,22 +834,13 @@ function resolveConfig() {
   }
 
   const manifestPath = process.env.MANIFEST_PATH;
-  const pluginModulePath = process.env.PLUGIN_MODULE_PATH
-    ? path.resolve(process.env.PLUGIN_MODULE_PATH)
-    : null;
   const projectRoot = process.env.GITHUB_WORKSPACE;
   const repository = process.env.GITHUB_REPOSITORY;
   const refName = process.env.GITHUB_REF_NAME;
 
-  if (
-    !manifestPath ||
-    !pluginModulePath ||
-    !projectRoot ||
-    !repository ||
-    !refName
-  ) {
+  if (!manifestPath || !projectRoot || !repository || !refName) {
     console.error(
-      "Missing required environment variables (MANIFEST_PATH, PLUGIN_MODULE_PATH, GITHUB_WORKSPACE, GITHUB_REPOSITORY, GITHUB_REF_NAME)",
+      "Missing required environment variables (MANIFEST_PATH, GITHUB_WORKSPACE, GITHUB_REPOSITORY, GITHUB_REF_NAME)",
     );
     console.error(
       "\nFor local testing, pass the project root as an argument:\n  node update-manifest.js /path/to/plugin-project",
@@ -376,7 +848,7 @@ function resolveConfig() {
     process.exit(1);
   }
 
-  return { manifestPath, pluginModulePath, projectRoot, repository, refName };
+  return { manifestPath, projectRoot, repository, refName };
 }
 
 /**
@@ -385,40 +857,40 @@ function resolveConfig() {
 async function main() {
   const config = resolveConfig();
 
-  // Load the compiled schema module
-  let pluginModule = {};
-  if (fsSync.existsSync(config.pluginModulePath)) {
-    console.log(`Loading plugin module from: ${config.pluginModulePath}`);
-    pluginModule = await loadPluginModule(config.pluginModulePath);
-  } else {
+  // Load schema exports directly from source TypeScript modules.
+  const sourceSchemas = await loadSourceSchemaExports(config.projectRoot);
+  let pluginModule = sourceSchemas.exports;
+  if (sourceSchemas.candidateFiles.length === 0) {
     warning(
-      `Plugin module not found at ${config.pluginModulePath}. Run the build step first, or exports will not be available.`,
+      'No source schema files found under "src/types". Manifest schema exports will not be auto-generated unless these files exist.',
+    );
+  } else if (!Object.keys(pluginModule).length) {
+    warning(
+      "Source schema files were found, but no manifest-related exports were detected.",
+    );
+  }
+  if (sourceSchemas.errors.length > 0) {
+    console.log(
+      "Source schema load errors:\n" +
+        sourceSchemas.errors.join("\n"),
     );
   }
 
   // Log discovered exports
   const exportsSummary = {
     pluginSettingsSchema: !!pluginModule.pluginSettingsSchema,
-    pluginCommands: pluginModule.pluginCommands !== undefined,
-    pluginListeners: pluginModule.pluginListeners !== undefined,
+    commandSchema: pluginModule.commandSchema !== undefined,
     pluginSkipBotEvents: pluginModule.pluginSkipBotEvents !== undefined,
   };
   console.log("Discovered exports:", JSON.stringify(exportsSummary));
 
-  // Extract SupportedEvents from TypeScript source as fallback for listeners
-  let supportedEvents = null;
-  if (pluginModule.pluginListeners === undefined) {
-    console.log(
-      "No pluginListeners export found. Scanning TypeScript source for SupportedEvents type...",
-    );
-    supportedEvents = await extractSupportedEvents(config.projectRoot);
-    if (supportedEvents) {
-      console.log(
-        `Extracted SupportedEvents: ${JSON.stringify(supportedEvents)}`,
-      );
-    } else {
-      console.log("No SupportedEvents type found in source files.");
-    }
+  // Extract listeners from SupportedEvents in source TypeScript modules.
+  console.log("Scanning TypeScript source for SupportedEvents type...");
+  const supportedEvents = await extractSupportedEvents(config.projectRoot);
+  if (supportedEvents) {
+    console.log(`Extracted SupportedEvents: ${JSON.stringify(supportedEvents)}`);
+  } else {
+    console.log("No SupportedEvents type found in source files.");
   }
 
   // Read consuming plugin's package.json
@@ -459,6 +931,7 @@ async function main() {
   // Write manifest
   const updatedManifest = JSON.stringify(manifest, null, 2);
   await fs.writeFile(config.manifestPath, updatedManifest, "utf8");
+  await formatManifestWithPrettier(config.manifestPath, config.projectRoot);
   console.log(`Manifest written to ${config.manifestPath}`);
 }
 
@@ -467,9 +940,17 @@ module.exports = {
   buildManifest,
   customReviver,
   validateCommands,
+  convertTypeBoxCommandSchema,
   validateListeners,
   extractSupportedEvents,
   orderManifestFields,
+  resolvePluginModulePath,
+  findSourceSchemaCandidateFiles,
+  loadSourceSchemaExports,
+  formatManifestWithPrettier,
+  pickManifestExports,
+  parseDenoLoaderOutput,
+  ensureNodeDenoShim,
 };
 
 // Run main when executed directly

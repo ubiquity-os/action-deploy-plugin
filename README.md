@@ -52,10 +52,13 @@ This GitHub Action automates the process of checking out a repository, setting u
 2. **Set up Node.js**:
    Uses the `actions/setup-node@v4` action to set up a specified version of Node.js.
 
-3. **Install dependencies**:
+3. **Set up Deno**:
+   Uses `denoland/setup-deno@v2` so schema modules can be loaded in a Deno-compatible runtime when needed.
+
+4. **Install dependencies**:
    Runs `bun install` to install the project's dependencies with frozen lockfile settings.
 
-4. **Build project**:
+5. **Build project**:
    Builds the project using `bun ncc` (or `esbuild` when `bundleSingleFile` is enabled).
 
 6. **Update manifest configuration JSON**:
@@ -117,8 +120,8 @@ The action auto-generates `manifest.json` fields from code exports and `package.
 |---|---|---|
 | `name` | `package.json` | — |
 | `description` | `package.json` | — |
-| `commands` | Schema module export | `pluginCommands` |
-| `ubiquity:listeners` | Schema module export or `SupportedEvents` type | `pluginListeners` |
+| `commands` | Source TypeScript schema export | `commandSchema` |
+| `ubiquity:listeners` | Source TypeScript type alias | `SupportedEvents` |
 | `skipBotEvents` | Schema module export | `pluginSkipBotEvents` |
 | `configuration` | Schema module export | `pluginSettingsSchema` |
 | `short_name` | Auto (`owner/repo@ref`) | — |
@@ -138,18 +141,12 @@ export const pluginSettingsSchema = T.Object(
 );
 
 // Command definitions (used for manifest.commands)
-export const pluginCommands = {
+export const commandSchema = {
   hello: {
     description: "Say hello with an argument.",
     "ubiquity:example": "/hello world",
   },
 };
-
-// Webhook event listeners (used for manifest["ubiquity:listeners"])
-export const pluginListeners = [
-  "issue_comment.created",
-  "issue_comment.edited",
-];
 
 // Whether to skip bot-triggered events (used for manifest.skipBotEvents)
 export const pluginSkipBotEvents = true;
@@ -157,9 +154,13 @@ export const pluginSkipBotEvents = true;
 export type PluginSettings = StaticDecode<typeof pluginSettingsSchema>;
 ```
 
+If you export `commandSchema` as a TypeBox union (for example `T.Union([...])` of command object schemas), the action derives `manifest.commands` from the union variants using the literal `name` field plus its metadata (`description`, `examples`).
+
+Schema exports are loaded from source TypeScript modules under `src/types/*.ts` (Deno-first runtime loading, with Node fallback).
+
 ### SupportedEvents Type Extraction
 
-If `pluginListeners` is not exported, the action will scan TypeScript source files in `src/` for a `SupportedEvents` type alias and extract the webhook event names automatically:
+The action scans TypeScript source files in `src/` for a `SupportedEvents` type alias and extracts the webhook event names automatically:
 
 ```typescript
 // src/types/context.ts
@@ -169,7 +170,7 @@ export type SupportedEvents =
   | "issues.unassigned";
 ```
 
-The string literals from the union type are extracted and used as `ubiquity:listeners`. This is a fallback — if `pluginListeners` is exported, it takes priority.
+The string literals from the union type are extracted and used as `ubiquity:listeners`.
 
 ### Local Testing
 
@@ -179,13 +180,13 @@ You can run the manifest generation locally against any plugin project:
 node .github/scripts/update-manifest.js /path/to/your-plugin
 ```
 
-This reads the project's `manifest.json`, `package.json`, `plugin/index.js` (if built), and `src/` directory (for `SupportedEvents`), then writes the updated manifest. No environment variables needed.
+This reads the project's `manifest.json`, `package.json`, and source TypeScript files under `src/`, then writes the updated manifest. No environment variables needed.
 
 ### Backward Compatibility
 
 All new exports are optional. If an export is missing, the action will:
 
-- Preserve any existing value in `manifest.json`
+- Preserve any existing value in `manifest.json` (except `skipBotEvents`, which defaults to `true` when `pluginSkipBotEvents` is missing)
 - Emit a warning in the CI log
 
 Plugins that only export `pluginSettingsSchema` will continue to work exactly as before.

@@ -7,9 +7,15 @@ const {
   buildManifest,
   customReviver,
   validateCommands,
+  convertTypeBoxCommandSchema,
   validateListeners,
   extractSupportedEvents,
   orderManifestFields,
+  resolvePluginModulePath,
+  findSourceSchemaCandidateFiles,
+  pickManifestExports,
+  parseDenoLoaderOutput,
+  ensureNodeDenoShim,
 } = require("../update-manifest.js");
 
 const REPO_INFO = { repository: "ubiquity-os/test-plugin", refName: "main" };
@@ -23,15 +29,15 @@ describe("buildManifest", () => {
         properties: { greeting: { type: "string", default: "Hello" } },
         required: ["greeting"],
       },
-      pluginCommands: {
+      commandSchema: {
         hello: {
           description: "Say hello",
           "ubiquity:example": "/hello world",
         },
       },
-      pluginListeners: ["issue_comment.created", "issues.labeled"],
       pluginSkipBotEvents: true,
     };
+    const supportedEvents = ["issue_comment.created", "issues.labeled"];
     const packageJson = {
       name: "my-plugin",
       description: "A great plugin",
@@ -42,16 +48,14 @@ describe("buildManifest", () => {
       pluginModule,
       packageJson,
       REPO_INFO,
+      { supportedEvents },
     );
 
     assert.equal(manifest.name, "my-plugin");
     assert.equal(manifest.short_name, "ubiquity-os/test-plugin@main");
     assert.equal(manifest.description, "A great plugin");
-    assert.deepEqual(manifest.commands, pluginModule.pluginCommands);
-    assert.deepEqual(manifest["ubiquity:listeners"], [
-      "issue_comment.created",
-      "issues.labeled",
-    ]);
+    assert.deepEqual(manifest.commands, pluginModule.commandSchema);
+    assert.deepEqual(manifest["ubiquity:listeners"], supportedEvents);
     assert.equal(manifest.skipBotEvents, true);
     assert.ok(manifest.configuration);
     assert.equal(manifest.homepage_url, "https://example.com");
@@ -86,14 +90,14 @@ describe("buildManifest", () => {
     // name and description come from package.json
     assert.equal(manifest.name, "new-name");
     assert.equal(manifest.description, "new desc");
-    // commands, listeners, skipBotEvents not overwritten (existing values kept since no exports)
-    // Actually, existing values in manifest are preserved since we spread existingManifest
-    // and only set new values when exports are present
+    // commands/listeners remain preserved since no related exports were provided
     assert.deepEqual(manifest.commands, {
       old: { description: "old", "ubiquity:example": "/old" },
     });
-    // Warnings about missing pluginCommands, listeners, pluginSkipBotEvents
-    assert.ok(warnings.some((w) => w.includes("pluginCommands")));
+    // skipBotEvents defaults to true when pluginSkipBotEvents is not exported
+    assert.equal(manifest.skipBotEvents, true);
+    // Warnings about missing commandSchema, SupportedEvents, pluginSkipBotEvents
+    assert.ok(warnings.some((w) => w.includes("commandSchema")));
     assert.ok(
       warnings.some(
         (w) =>
@@ -159,6 +163,7 @@ describe("buildManifest", () => {
 
     assert.equal(manifest.name, undefined);
     assert.equal(manifest.description, undefined);
+    assert.equal(manifest.skipBotEvents, true);
     assert.ok(
       warnings.some(
         (w) => w.includes("manifest.name") && w.includes("will be absent"),
@@ -174,7 +179,7 @@ describe("buildManifest", () => {
 
   it("skips commands with invalid type (string)", () => {
     const existingManifest = {};
-    const pluginModule = { pluginCommands: "not-an-object" };
+    const pluginModule = { commandSchema: "not-an-object" };
 
     const { manifest, warnings } = buildManifest(
       existingManifest,
@@ -188,7 +193,214 @@ describe("buildManifest", () => {
       warnings.some(
         (w) =>
           w.includes("manifest.commands") &&
+          w.includes("commandSchema export is invalid") &&
           w.includes("must be a plain object"),
+      ),
+    );
+  });
+
+  it("uses commandSchema when present", () => {
+    const existingManifest = {};
+    const pluginModule = {
+      commandSchema: {
+        hello: {
+          description: "Say hello",
+          "ubiquity:example": "/hello world",
+        },
+      },
+    };
+
+    const { manifest, warnings } = buildManifest(
+      existingManifest,
+      pluginModule,
+      null,
+      REPO_INFO,
+    );
+
+    assert.deepEqual(manifest.commands, pluginModule.commandSchema);
+    assert.ok(
+      !warnings.some(
+        (w) =>
+          w.includes("manifest.commands") &&
+          w.includes("Field will not be auto-generated"),
+      ),
+    );
+  });
+
+  it("always uses commandSchema even when pluginCommands is present", () => {
+    const existingManifest = {};
+    const pluginModule = {
+      pluginCommands: {
+        first: {
+          description: "Primary command source",
+          "ubiquity:example": "/first",
+        },
+      },
+      commandSchema: {
+        second: {
+          description: "Fallback command source",
+          "ubiquity:example": "/second",
+        },
+      },
+    };
+
+    const { manifest } = buildManifest(
+      existingManifest,
+      pluginModule,
+      null,
+      REPO_INFO,
+    );
+
+    assert.deepEqual(manifest.commands, pluginModule.commandSchema);
+  });
+
+  it("converts TypeBox commandSchema union to manifest.commands", () => {
+    const existingManifest = {};
+    const pluginModule = {
+      commandSchema: {
+        anyOf: [
+          {
+            type: "object",
+            properties: {
+              name: {
+                const: "start",
+                description: "Assign yourself and/or others to the issue/task.",
+                examples: ["/start"],
+              },
+              parameters: {
+                type: "object",
+                properties: {
+                  teammates: {
+                    type: "array",
+                    items: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+          {
+            type: "object",
+            properties: {
+              name: {
+                const: "stop",
+                description: "Unassign yourself from the issue/task.",
+                examples: ["/stop"],
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const { manifest, warnings } = buildManifest(
+      existingManifest,
+      pluginModule,
+      null,
+      REPO_INFO,
+    );
+
+    assert.equal(
+      manifest.commands.start.description,
+      "Assign yourself and/or others to the issue/task.",
+    );
+    assert.equal(manifest.commands.start["ubiquity:example"], "/start");
+    assert.equal(
+      manifest.commands.stop.description,
+      "Unassign yourself from the issue/task.",
+    );
+    assert.equal(manifest.commands.stop["ubiquity:example"], "/stop");
+    assert.ok(
+      !warnings.some(
+        (w) =>
+          w.includes("manifest.commands") &&
+          w.includes("could not be converted"),
+      ),
+    );
+  });
+
+  it("reuses existing manifest command metadata when commandSchema omits it", () => {
+    const existingManifest = {
+      commands: {
+        stop: {
+          description: "Unassign yourself from the issue/task.",
+          "ubiquity:example": "/stop",
+          parameters: {
+            type: "object",
+            properties: {},
+          },
+        },
+      },
+    };
+    const pluginModule = {
+      commandSchema: {
+        anyOf: [
+          {
+            type: "object",
+            properties: {
+              name: {
+                const: "stop",
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const { manifest, warnings } = buildManifest(
+      existingManifest,
+      pluginModule,
+      null,
+      REPO_INFO,
+    );
+
+    assert.equal(
+      manifest.commands.stop.description,
+      "Unassign yourself from the issue/task.",
+    );
+    assert.equal(manifest.commands.stop["ubiquity:example"], "/stop");
+    assert.deepEqual(manifest.commands.stop.parameters, {
+      type: "object",
+      properties: {},
+    });
+    assert.ok(
+      !warnings.some(
+        (w) =>
+          w.includes("manifest.commands") &&
+          w.includes("could not be converted"),
+      ),
+    );
+  });
+
+  it("warns when commandSchema exists but cannot be converted", () => {
+    const existingManifest = {};
+    const pluginModule = {
+      commandSchema: {
+        anyOf: [
+          {
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const { manifest, warnings } = buildManifest(
+      existingManifest,
+      pluginModule,
+      null,
+      REPO_INFO,
+    );
+
+    assert.equal(manifest.commands, undefined);
+    assert.ok(
+      warnings.some(
+        (w) =>
+          w.includes("manifest.commands") &&
+          w.includes("could not be converted"),
       ),
     );
   });
@@ -196,7 +408,7 @@ describe("buildManifest", () => {
   it("skips commands when command is missing description", () => {
     const existingManifest = {};
     const pluginModule = {
-      pluginCommands: {
+      commandSchema: {
         bad: { "ubiquity:example": "/bad" },
       },
     };
@@ -221,7 +433,7 @@ describe("buildManifest", () => {
   it("skips commands when command is missing ubiquity:example", () => {
     const existingManifest = {};
     const pluginModule = {
-      pluginCommands: {
+      commandSchema: {
         bad: { description: "A command" },
       },
     };
@@ -245,13 +457,14 @@ describe("buildManifest", () => {
 
   it("skips listeners with invalid type (object)", () => {
     const existingManifest = {};
-    const pluginModule = { pluginListeners: { event: true } };
+    const pluginModule = {};
 
     const { manifest, warnings } = buildManifest(
       existingManifest,
       pluginModule,
       null,
       REPO_INFO,
+      { supportedEvents: { event: true } },
     );
 
     assert.equal(manifest["ubiquity:listeners"], undefined);
@@ -265,13 +478,14 @@ describe("buildManifest", () => {
 
   it("skips listeners with invalid entry format (no dot)", () => {
     const existingManifest = {};
-    const pluginModule = { pluginListeners: ["push"] };
+    const pluginModule = {};
 
     const { manifest, warnings } = buildManifest(
       existingManifest,
       pluginModule,
       null,
       REPO_INFO,
+      { supportedEvents: ["push"] },
     );
 
     assert.equal(manifest["ubiquity:listeners"], undefined);
@@ -315,7 +529,7 @@ describe("buildManifest", () => {
         },
         required: ["greeting"],
       },
-      pluginCommands: {
+      commandSchema: {
         test: {
           description: "Test command",
           "ubiquity:example": "/test",
@@ -365,7 +579,7 @@ describe("buildManifest", () => {
     );
   });
 
-  it("only sets short_name when manifest is empty and no exports", () => {
+  it("sets short_name and default skipBotEvents when manifest is empty and no exports", () => {
     const existingManifest = {};
     const pluginModule = {};
 
@@ -377,11 +591,11 @@ describe("buildManifest", () => {
     );
 
     assert.equal(manifest.short_name, "ubiquity-os/test-plugin@main");
-    // Only short_name should be defined
+    assert.equal(manifest.skipBotEvents, true);
     const definedKeys = Object.keys(manifest).filter(
       (k) => manifest[k] !== undefined,
     );
-    assert.deepEqual(definedKeys, ["short_name"]);
+    assert.deepEqual(definedKeys, ["short_name", "skipBotEvents"]);
   });
 
   it("handles skipBotEvents=false correctly", () => {
@@ -463,6 +677,62 @@ describe("validateCommands", () => {
       hello: { description: "Hello" },
     });
     assert.ok(result.includes('missing a "ubiquity:example"'));
+  });
+});
+
+describe("convertTypeBoxCommandSchema", () => {
+  it("returns a commands map for a valid TypeBox union schema", () => {
+    const { commands, error } = convertTypeBoxCommandSchema({
+      anyOf: [
+        {
+          type: "object",
+          properties: {
+            name: {
+              const: "start",
+              description: "Start command",
+              examples: ["/start"],
+            },
+          },
+        },
+      ],
+    });
+
+    assert.equal(error, null);
+    assert.equal(commands.start.description, "Start command");
+    assert.equal(commands.start["ubiquity:example"], "/start");
+  });
+
+  it("returns an error when union variants are missing", () => {
+    const { commands, error } = convertTypeBoxCommandSchema({});
+    assert.equal(commands, null);
+    assert.ok(error.includes("anyOf/oneOf"));
+  });
+
+  it("falls back to existing command metadata when schema metadata is absent", () => {
+    const { commands, error } = convertTypeBoxCommandSchema(
+      {
+        anyOf: [
+          {
+            type: "object",
+            properties: {
+              name: {
+                const: "stop",
+              },
+            },
+          },
+        ],
+      },
+      {
+        stop: {
+          description: "Existing stop command",
+          "ubiquity:example": "/stop",
+        },
+      },
+    );
+
+    assert.equal(error, null);
+    assert.equal(commands.stop.description, "Existing stop command");
+    assert.equal(commands.stop["ubiquity:example"], "/stop");
   });
 });
 
@@ -603,7 +873,7 @@ describe("orderManifestFields", () => {
 });
 
 describe("buildManifest with supportedEvents fallback", () => {
-  it("uses supportedEvents when pluginListeners export is absent", () => {
+  it("uses supportedEvents when available", () => {
     const existingManifest = {};
     const pluginModule = {};
     const supportedEvents = ["issue_comment.created", "pull_request.opened"];
@@ -630,7 +900,7 @@ describe("buildManifest with supportedEvents fallback", () => {
     );
   });
 
-  it("prefers pluginListeners export over supportedEvents", () => {
+  it("uses supportedEvents even when pluginListeners export exists", () => {
     const existingManifest = {};
     const pluginModule = {
       pluginListeners: ["issues.labeled"],
@@ -645,8 +915,10 @@ describe("buildManifest with supportedEvents fallback", () => {
       { supportedEvents },
     );
 
-    // pluginListeners takes priority
-    assert.deepEqual(manifest["ubiquity:listeners"], ["issues.labeled"]);
+    assert.deepEqual(manifest["ubiquity:listeners"], [
+      "issue_comment.created",
+      "pull_request.opened",
+    ]);
   });
 
   it("warns when supportedEvents has invalid entries", () => {
@@ -672,7 +944,7 @@ describe("buildManifest with supportedEvents fallback", () => {
     );
   });
 
-  it("warns when neither pluginListeners nor supportedEvents is available", () => {
+  it("warns when supportedEvents is not available", () => {
     const existingManifest = {};
     const pluginModule = {};
 
@@ -799,5 +1071,228 @@ export type Context = PluginContext<SupportedEvents>;
       "pull_request.opened",
       "issues.labeled",
     ]);
+  });
+});
+
+describe("resolvePluginModulePath", () => {
+  let tmpDir;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "manifest-resolve-"));
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns configured path when it exists", async () => {
+    const projectDir = path.join(tmpDir, "configured-first");
+    const configuredPath = path.join(projectDir, "custom", "module.js");
+    fs.mkdirSync(path.dirname(configuredPath), { recursive: true });
+    fs.writeFileSync(configuredPath, "export const pluginSettingsSchema = {};");
+
+    const { resolvedPath } = await resolvePluginModulePath(
+      configuredPath,
+      projectDir,
+    );
+
+    assert.equal(resolvedPath, configuredPath);
+  });
+
+  it("falls back to dist/plugin/index.js when configured path is missing", async () => {
+    const projectDir = path.join(tmpDir, "dist-plugin-fallback");
+    const distPluginPath = path.join(projectDir, "dist", "plugin", "index.js");
+    fs.mkdirSync(path.dirname(distPluginPath), { recursive: true });
+    fs.writeFileSync(distPluginPath, "export const pluginSettingsSchema = {};");
+
+    const { resolvedPath } = await resolvePluginModulePath(
+      path.join(projectDir, "missing", "index.js"),
+      projectDir,
+    );
+
+    assert.equal(resolvedPath, distPluginPath);
+  });
+
+  it("scans dist for schema-like exports when conventional paths are absent", async () => {
+    const projectDir = path.join(tmpDir, "dist-scan-fallback");
+    const scannedBundlePath = path.join(projectDir, "dist", "bundle.min.js");
+    fs.mkdirSync(path.dirname(scannedBundlePath), { recursive: true });
+    fs.writeFileSync(
+      scannedBundlePath,
+      "var a={};export{a as pluginSettingsSchema};",
+    );
+
+    const { resolvedPath } = await resolvePluginModulePath(
+      path.join(projectDir, "missing", "index.js"),
+      projectDir,
+    );
+
+    assert.equal(resolvedPath, scannedBundlePath);
+  });
+
+  it("returns null when no viable module exists", async () => {
+    const projectDir = path.join(tmpDir, "none-found");
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    const { resolvedPath, checkedPaths } = await resolvePluginModulePath(
+      path.join(projectDir, "missing", "index.js"),
+      projectDir,
+    );
+
+    assert.equal(resolvedPath, null);
+    assert.ok(checkedPaths.length > 0);
+  });
+
+  it("ignores fallback files that exist but don't look like schema bundles", async () => {
+    const projectDir = path.join(tmpDir, "fallback-without-markers");
+    const distPluginPath = path.join(projectDir, "dist", "plugin", "index.js");
+    fs.mkdirSync(path.dirname(distPluginPath), { recursive: true });
+    fs.writeFileSync(distPluginPath, "export const runtimeBundle = true;");
+
+    const { resolvedPath } = await resolvePluginModulePath(
+      path.join(projectDir, "missing", "index.js"),
+      projectDir,
+    );
+
+    assert.equal(resolvedPath, null);
+  });
+});
+
+describe("findSourceSchemaCandidateFiles", () => {
+  let tmpDir;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "manifest-source-candidates-"));
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("finds declaration exports in src/types", async () => {
+    const projectDir = path.join(tmpDir, "declarations");
+    const typesDir = path.join(projectDir, "src", "types");
+    fs.mkdirSync(typesDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(typesDir, "plugin-input.ts"),
+      "export const pluginSettingsSchema = {};",
+    );
+    fs.writeFileSync(
+      path.join(typesDir, "command.ts"),
+      "export const commandSchema = {};",
+    );
+
+    const candidates = await findSourceSchemaCandidateFiles(projectDir);
+    assert.equal(candidates.length, 2);
+    assert.ok(candidates[0].endsWith("plugin-input.ts"));
+  });
+
+  it("finds re-export patterns in src/types", async () => {
+    const projectDir = path.join(tmpDir, "reexports");
+    const typesDir = path.join(projectDir, "src", "types");
+    fs.mkdirSync(typesDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(typesDir, "index.ts"),
+      'export { commandSchema } from "./command";',
+    );
+    fs.writeFileSync(path.join(typesDir, "command.ts"), "export const x = 1;");
+
+    const candidates = await findSourceSchemaCandidateFiles(projectDir);
+    assert.equal(candidates.length, 1);
+    assert.ok(candidates[0].endsWith("index.ts"));
+  });
+});
+
+describe("pickManifestExports", () => {
+  it("picks named exports directly", () => {
+    const picked = pickManifestExports({
+      pluginSettingsSchema: { type: "object" },
+      commandSchema: { ping: { description: "Ping", "ubiquity:example": "/ping" } },
+      noise: 123,
+    });
+
+    assert.deepEqual(Object.keys(picked).sort(), [
+      "commandSchema",
+      "pluginSettingsSchema",
+    ]);
+  });
+
+  it("falls back to default object exports", () => {
+    const picked = pickManifestExports({
+      default: {
+        commandSchema: { anyOf: [] },
+      },
+    });
+
+    assert.deepEqual(Object.keys(picked), ["commandSchema"]);
+  });
+
+  it("returns empty object for unsupported inputs", () => {
+    assert.deepEqual(pickManifestExports(null), {});
+    assert.deepEqual(pickManifestExports("x"), {});
+  });
+});
+
+describe("parseDenoLoaderOutput", () => {
+  it("extracts manifest exports from marked output", () => {
+    const parsed = parseDenoLoaderOutput(
+      [
+        "some log line",
+        "__CODEX_MANIFEST_EXPORTS__{\"pluginSettingsSchema\":{\"type\":\"object\"}}",
+      ].join("\n"),
+    );
+
+    assert.deepEqual(parsed, {
+      pluginSettingsSchema: { type: "object" },
+    });
+  });
+
+  it("throws when marker is missing", () => {
+    assert.throws(() => parseDenoLoaderOutput("plain output"));
+  });
+
+  it("throws when payload JSON is invalid", () => {
+    assert.throws(() =>
+      parseDenoLoaderOutput("__CODEX_MANIFEST_EXPORTS__{not-json}"),
+    );
+  });
+});
+
+describe("ensureNodeDenoShim", () => {
+  it("injects a minimal shim when Deno is absent", () => {
+    const hadDeno = Object.prototype.hasOwnProperty.call(globalThis, "Deno");
+    const previous = globalThis.Deno;
+    if (hadDeno) {
+      delete globalThis.Deno;
+    }
+
+    try {
+      const injected = ensureNodeDenoShim();
+      assert.equal(injected, true);
+      assert.equal(typeof globalThis.Deno.env.get, "function");
+      assert.equal(typeof globalThis.Deno.cwd, "function");
+    } finally {
+      delete globalThis.Deno;
+      if (hadDeno) {
+        globalThis.Deno = previous;
+      }
+    }
+  });
+
+  it("does not overwrite an existing Deno global", () => {
+    const hadDeno = Object.prototype.hasOwnProperty.call(globalThis, "Deno");
+    const previous = globalThis.Deno;
+    globalThis.Deno = { existing: true };
+
+    try {
+      const injected = ensureNodeDenoShim();
+      assert.equal(injected, false);
+      assert.equal(globalThis.Deno.existing, true);
+    } finally {
+      delete globalThis.Deno;
+      if (hadDeno) {
+        globalThis.Deno = previous;
+      }
+    }
   });
 });

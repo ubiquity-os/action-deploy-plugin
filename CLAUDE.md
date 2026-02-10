@@ -85,14 +85,15 @@ Integration testing is done at the GitHub Actions workflow level by consuming re
 - Schema processing removes `required` fields for properties that have defaults (scoped to `configuration` only)
 - ESM reassembly script patches bare Node.js built-in imports to `node:` prefixed imports
 - The action copies the appropriate reassembly script (CJS or ESM) to `dist/index.js`
-- Manifest generation extracts metadata from the compiled schema module exports:
+- Manifest generation extracts metadata from source TypeScript modules:
   - `pluginSettingsSchema` → `manifest.configuration`
-  - `pluginCommands` → `manifest.commands`
-  - `pluginListeners` → `manifest["ubiquity:listeners"]`
+  - `commandSchema` → `manifest.commands` (`commandSchema` may be a commands map or a TypeBox union)
   - `pluginSkipBotEvents` → `manifest.skipBotEvents`
-- If `pluginListeners` is not exported, the action scans TypeScript source for a `SupportedEvents` type alias and extracts the string literal union members as listener events
+- Schema module loading is Deno-first with Node fallbacks (including a lightweight Deno shim in Node)
+- Source schema exports are loaded from `src/types/*.ts` modules
+- The action scans TypeScript source for a `SupportedEvents` type alias and extracts the string literal union members as `manifest["ubiquity:listeners"]`
 - `name` and `description` are read from the consuming plugin's `package.json`
-- Missing exports emit warnings but do not fail the build (backward compatible)
+- Missing exports emit warnings but do not fail the build (backward compatible); when `pluginSkipBotEvents` is missing, `skipBotEvents` defaults to `true`
 - Manifest field ordering is deterministic to avoid noisy diffs
 - Local testing: `node .github/scripts/update-manifest.js /path/to/plugin-project`
 
