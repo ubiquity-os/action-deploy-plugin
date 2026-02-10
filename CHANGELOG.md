@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.2.0](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.1.4...v1.2.0) (2026-02-10)
+
+
+### Features
+
+* add short_name to manifest in action.yml ([48a04b5](https://github.com/ubiquity-os/action-deploy-plugin/commit/48a04b59cd97476856b89b641d9d0a1992d98b40))
+* add single-file bundling option ([aafef9a](https://github.com/ubiquity-os/action-deploy-plugin/commit/aafef9aaaf2307830a6a45e95235574ab99c42a3))
+* derive manifest metadata from plugin entrypoint contract ([8f71e7d](https://github.com/ubiquity-os/action-deploy-plugin/commit/8f71e7dd4710324537021fbb6e78ddb4ddb4c57b))
+* extract listeners from SupportedEvents type and add local testing mode ([e4b835d](https://github.com/ubiquity-os/action-deploy-plugin/commit/e4b835d35396ecb6485a906059dde4a18d5f1c2a))
+* generate manifest metadata from code exports and package.json ([4eca529](https://github.com/ubiquity-os/action-deploy-plugin/commit/4eca5299f3e7d2e52fe2e02de10342c32a73b406))
+* generate manifest metadata from code exports and package.json ([40cb3a2](https://github.com/ubiquity-os/action-deploy-plugin/commit/40cb3a2568eabbfca8a25f543dcd910df363651e)), closes [#27](https://github.com/ubiquity-os/action-deploy-plugin/issues/27)
+* set skipBotEvents from action input ([1112ffc](https://github.com/ubiquity-os/action-deploy-plugin/commit/1112ffc8fc099c8386b5b8cb24399d4811fc68b4))
+
+
+### Bug Fixes
+
+* address latest review comments ([8231e4e](https://github.com/ubiquity-os/action-deploy-plugin/commit/8231e4e5ba3ca958edc662ab62ced7df25b8d3fb))
+* address PR review feedback ([22c38e1](https://github.com/ubiquity-os/action-deploy-plugin/commit/22c38e1e4b6c24dc0801e8a11aa7258cddd0c08e))
+* changed commit and code sign to use a dedicated action and CLI ([9b62c92](https://github.com/ubiquity-os/action-deploy-plugin/commit/9b62c9287b61ea1a9448e56f4de469f16c0ae512))
+* **ci:** use npm install in tests workflow ([a67fda0](https://github.com/ubiquity-os/action-deploy-plugin/commit/a67fda0bdb670ac092b9d8d1748b70863ef0e632))
+* ensure node imports have proper prefixes ([ab0874b](https://github.com/ubiquity-os/action-deploy-plugin/commit/ab0874ba7bc3ed90042fc738fabd882eec0ad02a))
+* fixed ESM packge.json ([16f8202](https://github.com/ubiquity-os/action-deploy-plugin/commit/16f82026932cc7fe8d2e81b5f822b2400a757e7b))
+* generate manifest metadata from source TypeScript schemas ([1a761af](https://github.com/ubiquity-os/action-deploy-plugin/commit/1a761af6d970ba35f1e3e10f5cab82a623f7ced9))
+* large files get committed properly ([092a224](https://github.com/ubiquity-os/action-deploy-plugin/commit/092a2244991c4d04639d545a8fe3ef0ff7f8529e))
+* remove glob dependency from manifest updater ([260d50c](https://github.com/ubiquity-os/action-deploy-plugin/commit/260d50cdf01f96a1cc24aed1ee24b395a179ff75))
+* update node imports in reassembly-esm.js ([cb34619](https://github.com/ubiquity-os/action-deploy-plugin/commit/cb34619ef3c62e8b72d6ba19f2b28db3303dc08e))
+* use script instead of inlined js code and split files by commit ([9f705f3](https://github.com/ubiquity-os/action-deploy-plugin/commit/9f705f34a7e2434a38bdc084c3650f10706f6b3a))
+
 ## [1.1.4](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.1.3...v1.1.4) (2025-03-26)
 
 
