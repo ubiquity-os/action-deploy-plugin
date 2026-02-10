@@ -28,6 +28,8 @@ inputs:
     default: "false"
   sourcemap:
     description: "Generates the sourcemap for the compiled files"
+    required: false
+    default: "false"
   skipBotEvents:
     description: "Sets manifest.skipBotEvents (true/false)."
     required: false
@@ -97,11 +99,6 @@ runs:
         GITHUB_REF_NAME: ${{ github.ref_name }}
       run: |
         node ${{ github.action_path }}/.github/scripts/update-manifest.js
-
-    - name: Format manifest using Prettier
-      shell: bash
-      run: |
-        npx prettier --write manifest.json
 
     - name: Get GitHub App token
       if: env.APP_ID != '' && env.APP_PRIVATE_KEY != ''

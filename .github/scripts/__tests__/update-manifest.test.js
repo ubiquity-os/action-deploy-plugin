@@ -343,6 +343,34 @@ export type SupportedEvents = "issues.opened" | "issues.closed";
     );
   });
 
+  it("parses semicolonless type aliases", () => {
+    const source = `export type SupportedEvents = "issues.opened" | "issues.closed"
+export type NextAlias = "issues.labeled"
+`;
+
+    const aliases = parseTypeAliases(source);
+    assert.equal(
+      aliases.get("SupportedEvents"),
+      '"issues.opened" | "issues.closed"',
+    );
+    assert.equal(aliases.get("NextAlias"), '"issues.labeled"');
+  });
+
+  it("parses multiline object aliases without truncating inner semicolons", () => {
+    const source = `type Config = {
+  enabled: boolean;
+  name: string;
+}
+
+type Mode = "on" | "off";
+`;
+
+    const aliases = parseTypeAliases(source);
+    assert.ok(aliases.get("Config").includes("enabled: boolean;"));
+    assert.ok(aliases.get("Config").includes("name: string;"));
+    assert.equal(aliases.get("Mode"), '"on" | "off"');
+  });
+
   it("resolves TypeScript module paths from relative imports", () => {
     const projectRoot = createProject("resolve-ts-path");
     const fromFile = writeProjectFile(
@@ -773,6 +801,25 @@ export const value = Schemas.settingsRuntimeSchema;
     );
 
     assert.deepEqual(events, ["issue_comment.created", "pull_request.opened"]);
+  });
+
+  it("resolves supported event unions with apostrophes in string literals", async () => {
+    const projectRoot = createProject("supported-events-apostrophe");
+    const filePath = writeProjectFile(
+      projectRoot,
+      "src/types.ts",
+      "export type Dummy = true;\n",
+    );
+
+    const cache = new Map();
+    const events = await resolveSupportedEventsFromTypeExpression(
+      `"it's.opened" | 'issues.closed'`,
+      filePath,
+      projectRoot,
+      cache,
+    );
+
+    assert.deepEqual(events, ["it's.opened", "issues.closed"]);
   });
 });
 
