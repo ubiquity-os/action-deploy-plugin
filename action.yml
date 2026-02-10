@@ -32,6 +32,10 @@ inputs:
     description: "Sets manifest.skipBotEvents (true/false)."
     required: false
     default: "true"
+  excludeSupportedEvents:
+    description: "Comma-separated supported events to remove from generated manifest listeners."
+    required: false
+    default: ""
 outputs: {}
 runs:
   using: "composite"
@@ -87,6 +91,7 @@ runs:
       env:
         MANIFEST_PATH: ${{ inputs.manifestPath }}
         SKIP_BOT_EVENTS: ${{ inputs.skipBotEvents }}
+        EXCLUDE_SUPPORTED_EVENTS: ${{ inputs.excludeSupportedEvents }}
         GITHUB_WORKSPACE: ${{ github.workspace }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_REF_NAME: ${{ github.ref_name }}

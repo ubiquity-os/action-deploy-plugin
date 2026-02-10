@@ -1,216 +1,78 @@
 # @ubiquity-os/action-deploy-plugin
 
-Update Manifest, build and commit the changes signing the commit payload.
-
-## Description
-
-This GitHub Action automates the process of checking out a repository, setting up Node.js, installing dependencies, updating the `manifest.json` file, formatting it, and committing/pushing the changes with a signed commit.
+Builds a Ubiquity plugin, generates `manifest.json` metadata from source TypeScript entrypoint contracts, formats output, and commits/pushes changes.
 
 ## Inputs
 
-- **`manifestPath`**:
-    - **Description**: The path to the `manifest.json` file.
-    - **Required**: No
-    - **Default**: `${{ github.workspace }}/manifest.json`
+| Input | Required | Default | Description |
+| --- | --- | --- | --- |
+| `manifestPath` | No | `${{ github.workspace }}/manifest.json` | Path to the target manifest file. |
+| `schemaPath` | No | `${{ github.workspace }}/src/types/plugin-input.ts` | Source schema entrypoint used for build artifacts. |
+| `pluginEntry` | No | `${{ github.workspace }}/src/index.ts` | Plugin runtime entrypoint used during build. |
+| `commitMessage` | No | `chore: [skip ci] updated manifest.json and dist build` | Commit message for generated changes. |
+| `nodeVersion` | No | `24.11.0` | Node version used by the action. |
+| `treatAsEsm` | No | `false` | Replaces `__dirname` with `import.meta.dirname` in built output. |
+| `bundleSingleFile` | No | `false` | Enables single-file esbuild bundling. |
+| `sourcemap` | No | `false` | Generates source maps for build output. |
+| `skipBotEvents` | No | `true` | Sets `manifest.skipBotEvents` (`true`/`false`). |
+| `excludeSupportedEvents` | No | `""` | Comma-separated listener events to remove from generated `ubiquity:listeners`. |
 
-- **`schemaPath`**:
-    - **Description**: The path to the plugin settings schema.
-    - **Required**: No
-    - **Default**: `${{ github.workspace }}/src/types/plugin-input.ts`
+## Manifest Generation Contract
 
-- **`pluginEntry`**:
-    - **Description**: The path to the plugin entry file.
-    - **Required**: No
-    - **Default**: `${{ github.workspace }}/src/index.ts`
+The action derives metadata from **source TypeScript modules** by inspecting the plugin entrypoint call:
 
-- **`commitMessage`**:
-    - **Description**: The commit message.
-    - **Required**: No
-    - **Default**: `chore: updated manifest.json and dist build`
+- `createPlugin<TConfig, TEnv, TCommand, TSupportedEvents>(...)` (preferred)
+- `createActionsPlugin<TConfig, TEnv, TCommand, TSupportedEvents>(...)` (fallback)
 
-- **`nodeVersion`**:
-    - **Description**: The version of Node.js to use.
-    - **Default**: `20.10.0`
+### Required source contract
 
-- **`treatAsEsm`**:
-    - **Description**: If the package is set to be treated as ESM, it will replace __dirname occurrences.
-    - **Default**: `false`
+1. The entrypoint must use explicit generics.
+2. The options object must include a direct `settingsSchema` property.
+3. `TCommand` must be either:
+   - `null`, or
+   - a type alias declared as `StaticDecode<typeof X>` or `Static<typeof X>`.
+4. `TSupportedEvents` must resolve to string-literal events (direct union or traceable alias).
 
-- **`bundleSingleFile`**:
-    - **Description**: Bundle the plugin entry into a single file (disables code splitting).
-    - **Default**: `false`
+### Generated manifest fields
 
-- **`sourcemap`**:
-    - **Description**: Generates the sourcemap for the compiled files.
-    - **Default**: `false`
+| Field | Source |
+| --- | --- |
+| `name` | `package.json#name` |
+| `description` | `package.json#description` |
+| `short_name` | `${repository}@${ref}` |
+| `configuration` | runtime value referenced by `settingsSchema` |
+| `commands` | runtime schema inferred from `TCommand` (or omitted when `TCommand = null`) |
+| `ubiquity:listeners` | string literals resolved from `TSupportedEvents`, minus `excludeSupportedEvents` |
+| `skipBotEvents` | action input `skipBotEvents` (default `true`) |
 
-- **`skipBotEvents`**:
-    - **Description**: Sets `manifest.skipBotEvents` (`true` or `false`).
-    - **Required**: No
-    - **Default**: `true`
+### Strict failures (non-zero exit)
 
-## Steps
+The manifest script fails immediately when:
 
-1. **Check out the repository**:
-   Uses the `actions/checkout@v4` action to check out the repository.
+1. No valid entrypoint callsite is found.
+2. Multiple `createPlugin` callsites are found.
+3. `settingsSchema` is missing from options.
+4. `TCommand` is non-null and not traceable to `StaticDecode<typeof ...>` / `Static<typeof ...>`.
+5. `TSupportedEvents` cannot be resolved to string literals.
+6. `excludeSupportedEvents` includes unknown events.
 
-2. **Set up Node.js**:
-   Uses the `actions/setup-node@v4` action to set up a specified version of Node.js.
+## Event Exclusion
 
-3. **Set up Deno**:
-   Uses `denoland/setup-deno@v2` so schema modules can be loaded in a Deno-compatible runtime when needed.
+`excludeSupportedEvents` uses exact string matches only.
 
-4. **Install dependencies**:
-   Runs `bun install` to install the project's dependencies with frozen lockfile settings.
-
-5. **Build project**:
-   Builds the project using `bun ncc` (or `esbuild` when `bundleSingleFile` is enabled).
-
-6. **Update manifest configuration JSON**:
-   Updates the `manifest.json` file with plugin metadata derived from code exports and `package.json`.
-
-7. **Format manifest using Prettier**:
-   Installs Prettier and formats the `manifest.json` file and other project files.
-
-8. **Commit and Push changes**:
-   Configures Git, adds the updated files to the commit, and pushes the changes to the repository.
-
-## Usage Example
+Example:
 
 ```yaml
-name: Update Manifest and Commit Changes
-
-on:
-  push:
-
-jobs:
-  update-manifest:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Update Manifest and Commit Changes
-        uses: ubiquity-os/action-deploy-plugin@main
-        with:
-          manifestPath: ${{ github.workspace }}/manifest.json
-          schemaPath: ${{ github.workspace }}/src/types/plugin-input.ts
-          pluginEntry: ${{ github.workspace }}/src/index.ts
-          commitMessage: "chore: updated manifest.json and dist build"
-          nodeVersion: "20.10.0"
-        env:
-          APP_ID: ${{ secrets.APP_ID }}
-          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+with:
+  excludeSupportedEvents: "issues.labeled,pull_request.opened"
 ```
 
-## Environment Variables
+## Local Testing
 
-### Required
-
-- **`GITHUB_TOKEN`**: A GitHub token with repository permissions. This is automatically provided by GitHub Actions and does not require manual setup.
-
-### Optional
-
-If GitHub App authentication is to be used, the following environment variables are needed:
-- **`APP_ID`**: The GitHub App ID.
-- **`APP_PRIVATE_KEY`**: The GitHub App private key.
-
-When `APP_ID` and `APP_PRIVATE_KEY` are provided, the action will use GitHub App authentication. If they are not provided, the action will default to using `GITHUB_TOKEN`.
-
-## Manifest Generation
-
-The action auto-generates `manifest.json` fields from code exports and `package.json`. This keeps the manifest in sync with the source code and avoids manual drift.
-
-### Generated Fields
-
-| Manifest field | Source | Export name |
-|---|---|---|
-| `name` | `package.json` | — |
-| `description` | `package.json` | — |
-| `commands` | Source TypeScript schema export | `commandSchema` |
-| `ubiquity:listeners` | Source TypeScript type alias | `SupportedEvents` |
-| `skipBotEvents` | Action input | `skipBotEvents` |
-| `configuration` | Schema module export | `pluginSettingsSchema` |
-| `short_name` | Auto (`owner/repo@ref`) | — |
-| `homepage_url` | Preserved from existing manifest | — |
-
-### Plugin Schema Exports
-
-Add the following named exports to your schema file (the file referenced by `schemaPath`, default `src/types/plugin-input.ts`):
-
-```typescript
-import { StaticDecode, Type as T } from "@sinclair/typebox";
-
-// Plugin settings schema (existing, used for manifest.configuration)
-export const pluginSettingsSchema = T.Object(
-  { configurableResponse: T.String({ default: "Hello, world!" }) },
-  { default: {} },
-);
-
-// Command definitions (used for manifest.commands)
-export const commandSchema = {
-  hello: {
-    description: "Say hello with an argument.",
-    "ubiquity:example": "/hello world",
-  },
-};
-
-export type PluginSettings = StaticDecode<typeof pluginSettingsSchema>;
-```
-
-If you export `commandSchema` as a TypeBox union (for example `T.Union([...])` of command object schemas), the action derives `manifest.commands` from the union variants using the literal `name` field plus its metadata (`description`, `examples`).
-
-Schema exports are loaded from source TypeScript modules under `src/types/*.ts` (Deno-first runtime loading, with Node fallback).
-
-### SupportedEvents Type Extraction
-
-The action scans TypeScript source files in `src/` for a `SupportedEvents` type alias and extracts the webhook event names automatically:
-
-```typescript
-// src/types/context.ts
-export type SupportedEvents =
-  | "issue_comment.created"
-  | "pull_request.opened"
-  | "issues.unassigned";
-```
-
-The string literals from the union type are extracted and used as `ubiquity:listeners`.
-
-### Local Testing
-
-You can run the manifest generation locally against any plugin project:
+Run manifest generation locally against any plugin project:
 
 ```bash
-node .github/scripts/update-manifest.js /path/to/your-plugin
+node .github/scripts/update-manifest.js /absolute/path/to/plugin-project
 ```
 
-This reads the project's `manifest.json`, `package.json`, and source TypeScript files under `src/`, then writes the updated manifest. No environment variables needed.
-
-### Backward Compatibility
-
-All new exports are optional. If an export is missing, the action will:
-
-- Preserve any existing value in `manifest.json` when source data is missing (except `skipBotEvents`, which is always set from action input and defaults to `true`)
-- Emit a warning in the CI log
-
-Plugins that only export `pluginSettingsSchema` will continue to work exactly as before.
-
-### Package.json Fields
-
-Ensure your plugin's `package.json` includes `name` and `description`:
-
-```json
-{
-  "name": "my-plugin",
-  "description": "What this plugin does."
-}
-```
-
-If either field is absent or empty, the existing manifest value is preserved and a warning is emitted.
-
-## Features
-
-- Clones the repository and sets up Node.js and Bun.
-- Installs project dependencies using Bun.
-- Builds the project using `@vercel/ncc` via Bun.
-- Auto-generates manifest metadata from code exports and `package.json`.
-- Formats the project files using Prettier via Bun.
-- Commits and pushes changes to the repository.
+This command reads source under `src/`, updates `manifest.json`, and formats it with Prettier.

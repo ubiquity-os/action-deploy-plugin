@@ -2,101 +2,79 @@
 
 ## Project Overview
 
-This is `@ubiquity-os/action-deploy-plugin`, a composite GitHub Action that automates building, manifest updating, and deploying Ubiquity OS plugins. It handles checkout, dependency installation, project building, manifest configuration updates, and signed git commits/pushes.
+`@ubiquity-os/action-deploy-plugin` is a composite GitHub Action that:
+
+1. builds a plugin project,
+2. generates `manifest.json` metadata from source TypeScript entrypoint contracts,
+3. formats output,
+4. commits and pushes manifest/dist changes.
 
 ## Tech Stack
 
-- **Language:** JavaScript/YAML (no TypeScript in this repo itself)
-- **Runtime:** Node.js (default 24.11.0), Bun (package management)
-- **Bundlers:** @vercel/ncc (default, code-split bundles) or esbuild (single-file mode)
-- **Module System:** Supports both ESM and CommonJS plugins
-- **Formatting:** Prettier 3.x
-- **Dependencies:** `@actions/github`, `glob`, `prettier`
+- Language: JavaScript + YAML
+- Runtime: Node.js (default `24.11.0`), Bun, Deno-aware manifest loader
+- Build tools: `@vercel/ncc` (default) or `esbuild` (single-file mode)
+- Test runner: Node built-in `node:test`
+- Formatting: Prettier
 
-## Project Structure
+## Structure
 
 ```
 action-deploy-plugin/
-├── action.yml                    # Main action definition (composite steps)
-├── .github/
-│   ├── scripts/
-│   │   ├── update-manifest.js    # Manifest generation from code exports + package.json
-│   │   ├── push-changes.js       # GitHub API commit/push via Octokit
-│   │   ├── reassembly-cjs.js     # CJS reassembly wrapper for dist/index.js
-│   │   ├── reassembly-esm.js     # ESM reassembly wrapper with Node import fixes
-│   │   └── __tests__/
-│   │       └── update-manifest.test.js  # Unit tests for manifest generation
-│   ├── workflows/
-│   │   └── release-please.yml    # Automated releases via release-please
-│   └── CODEOWNERS
+├── action.yml
+├── AGENTS.md
+├── README.md
 ├── package.json
-└── README.md
+└── .github/
+    ├── scripts/
+    │   ├── update-manifest.js
+    │   ├── push-changes.js
+    │   ├── reassembly-cjs.js
+    │   ├── reassembly-esm.js
+    │   └── __tests__/update-manifest.test.js
+    └── workflows/
+        ├── tests.yml
+        └── release-please.yml
 ```
 
-## Build & Run
+## Manifest Detection Rules
 
-There is no local build step — this is a composite GitHub Action executed in CI. The action itself builds the _consuming_ plugin project:
+Manifest metadata is derived from source entrypoint calls in `src/**/*.ts`:
 
-1. Installs dependencies with `bun install`
-2. Bundles the plugin using `bun ncc build` (or esbuild when `bundleSingleFile=true`)
-3. Generates `manifest.json` from code exports and `package.json`
-4. Commits and pushes via the GitHub API (signed commits)
+- preferred: `createPlugin<TConfig, TEnv, TCommand, TSupportedEvents>(...)`
+- fallback: `createActionsPlugin<TConfig, TEnv, TCommand, TSupportedEvents>(...)`
 
-## Action Inputs
+Required contract:
 
-| Input | Default | Description |
-|-------|---------|-------------|
-| `manifestPath` | `$GITHUB_WORKSPACE/manifest.json` | Path to manifest.json |
-| `schemaPath` | `$GITHUB_WORKSPACE/src/types/plugin-input.ts` | Plugin settings schema TS file |
-| `pluginEntry` | `$GITHUB_WORKSPACE/src/index.ts` | Plugin entry file |
-| `commitMessage` | `chore: [skip ci] updated manifest.json and dist build` | Git commit message |
-| `nodeVersion` | `24.11.0` | Node.js version |
-| `treatAsEsm` | `false` | Replace `__dirname` with `import.meta.dirname` |
-| `bundleSingleFile` | `false` | Use esbuild single-file bundle |
-| `sourcemap` | `false` | Generate sourcemaps |
+1. Explicit generics are mandatory.
+2. Options object must include direct `settingsSchema`.
+3. `TCommand` must be `null` or a type alias of `StaticDecode<typeof X>` / `Static<typeof X>`.
+4. `TSupportedEvents` must resolve to string-literal events.
 
-## Testing
+Strict failures (exit non-zero):
 
-Unit tests use Node.js built-in `node:test` and `node:assert` (no external test framework needed).
+- no valid entrypoint,
+- ambiguous entrypoints,
+- missing `settingsSchema`,
+- invalid command type contract,
+- unsupported listeners contract,
+- unknown `excludeSupportedEvents` names.
+
+## Action Inputs Relevant to Manifest
+
+- `skipBotEvents` (`true`/`false`, default `true`)
+- `excludeSupportedEvents` (comma-separated exact event names, default empty)
+
+## Local Development
+
+Run tests:
 
 ```bash
-node --test .github/scripts/__tests__/
+npm test
 ```
 
-Integration testing is done at the GitHub Actions workflow level by consuming repositories.
+Run manifest generation against a plugin project:
 
-## Code Conventions
-
-- camelCase for variables and functions
-- Async/await for promise handling
-- ESM imports preferred (`import x from "node:fs"`)
-- Prettier for formatting manifest files
-- No linter configured beyond Prettier
-
-## Environment Variables
-
-- `GITHUB_TOKEN` — provided automatically by GitHub Actions
-- `GITHUB_WORKSPACE`, `GITHUB_REF_NAME` — GitHub Actions context
-- `APP_ID`, `APP_PRIVATE_KEY` — optional, for GitHub App authentication
-
-## Key Implementation Details
-
-- Files >30MB are chunked during git operations
-- Schema processing removes `required` fields for properties that have defaults (scoped to `configuration` only)
-- ESM reassembly script patches bare Node.js built-in imports to `node:` prefixed imports
-- The action copies the appropriate reassembly script (CJS or ESM) to `dist/index.js`
-- Manifest generation extracts metadata from source TypeScript modules:
-  - `pluginSettingsSchema` → `manifest.configuration`
-  - `commandSchema` → `manifest.commands` (`commandSchema` may be a commands map or a TypeBox union)
-- Manifest generation sets `manifest.skipBotEvents` from the action input `skipBotEvents` (default `true`)
-- Schema module loading is Deno-first with Node fallbacks (including a lightweight Deno shim in Node)
-- Source schema exports are loaded from `src/types/*.ts` modules
-- The action scans TypeScript source for a `SupportedEvents` type alias and extracts the string literal union members as `manifest["ubiquity:listeners"]`
-- `name` and `description` are read from the consuming plugin's `package.json`
-- Missing exports emit warnings but do not fail the build (backward compatible); `skipBotEvents` always comes from action input/default
-- Manifest field ordering is deterministic to avoid noisy diffs
-- Local testing: `node .github/scripts/update-manifest.js /path/to/plugin-project`
-
-## Release Process
-
-Releases are automated via `release-please` on push to `main` or manual dispatch.
+```bash
+node .github/scripts/update-manifest.js /absolute/path/to/plugin-project
+```
