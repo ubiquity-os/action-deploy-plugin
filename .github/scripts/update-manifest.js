@@ -786,9 +786,9 @@ function normalizeObjectKey(rawKey) {
   if (/^[A-Za-z_$][\w$]*$/.test(key)) {
     return key;
   }
-  const quoted = key.match(/^["']([^"']+)["']$/);
+  const quoted = key.match(/^(["'])(.+)\1$/);
   if (quoted) {
-    return quoted[1];
+    return quoted[2];
   }
   return null;
 }
@@ -1542,6 +1542,7 @@ console.log(${JSON.stringify(DENO_OUTPUT_PREFIX)} + JSON.stringify(out));
       ["eval", "--quiet", script],
       {
         maxBuffer: 20 * 1024 * 1024,
+        timeout: 60_000,
       },
     );
 
@@ -1639,14 +1640,15 @@ async function extractManifestMetadataFromEntrypoint(
   );
 
   const commandTypeExpr = entrypoint.genericArgs[2];
+  const normalizedCommandType = stripOuterParens(commandTypeExpr).trim();
   let commandSchema;
   let allowMissingCommandSchema = false;
 
-  if (stripOuterParens(commandTypeExpr).trim() === "null") {
+  if (normalizedCommandType === "null") {
     allowMissingCommandSchema = true;
-  } else if (/^[A-Za-z_$][\w$]*$/.test(stripOuterParens(commandTypeExpr).trim())) {
+  } else if (/^[A-Za-z_$][\w$]*$/.test(normalizedCommandType)) {
     const alias = await resolveTypeAlias(
-      stripOuterParens(commandTypeExpr).trim(),
+      normalizedCommandType,
       entrypoint.filePath,
       projectRoot,
       sourceCache,
@@ -1759,7 +1761,7 @@ async function formatManifestWithPrettier(manifestPath, cwd) {
   try {
     await execFileAsync(
       npxCommand,
-      ["--yes", "prettier", "--write", manifestPath],
+      ["prettier", "--write", manifestPath],
       { cwd, maxBuffer: 20 * 1024 * 1024 },
     );
     return true;
