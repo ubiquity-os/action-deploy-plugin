@@ -47,17 +47,19 @@ Manifest metadata is derived from source entrypoint calls in `src/**/*.ts`:
 Required contract:
 
 1. Explicit generics are mandatory.
-2. Options object must include direct `settingsSchema`.
+2. `TConfig` must be a type alias of `StaticDecode<typeof X>` / `Static<typeof X>`.
 3. `TCommand` must be `null` or a type alias of `StaticDecode<typeof X>` / `Static<typeof X>`.
 4. `TSupportedEvents` must resolve to string-literal events.
+5. `settingsSchema` in options is optional, but if present must be statically resolvable (direct property or via spread chains).
 
 Strict failures (exit non-zero):
 
 - no valid entrypoint,
 - ambiguous entrypoints,
-- missing `settingsSchema`,
+- unresolved settings schema from both `TConfig` and options,
 - invalid command type contract,
 - unsupported listeners contract,
+- mismatch between `TConfig` schema and options `settingsSchema`,
 - unknown `excludeSupportedEvents` names.
 
 ## Action Inputs Relevant to Manifest

@@ -27,11 +27,12 @@ The action derives metadata from **source TypeScript modules** by inspecting the
 ### Required source contract
 
 1. The entrypoint must use explicit generics.
-2. The options object must include a direct `settingsSchema` property.
+2. `TConfig` must be a traceable type alias declared as `StaticDecode<typeof X>` or `Static<typeof X>`.
 3. `TCommand` must be either:
    - `null`, or
    - a type alias declared as `StaticDecode<typeof X>` or `Static<typeof X>`.
 4. `TSupportedEvents` must resolve to string-literal events (direct union or traceable alias).
+5. `settingsSchema` in options is optional, but if present it must be statically resolvable (direct property or via object spread chains).
 
 ### Generated manifest fields
 
@@ -40,7 +41,7 @@ The action derives metadata from **source TypeScript modules** by inspecting the
 | `name` | `package.json#name` |
 | `description` | `package.json#description` |
 | `short_name` | `${repository}@${ref}` |
-| `configuration` | runtime value referenced by `settingsSchema` |
+| `configuration` | runtime schema resolved from `TConfig` (`StaticDecode<typeof X>` / `Static<typeof X>`), validated against options `settingsSchema` when present |
 | `commands` | runtime schema inferred from `TCommand` (or omitted when `TCommand = null`) |
 | `ubiquity:listeners` | string literals resolved from `TSupportedEvents`, minus `excludeSupportedEvents` |
 | `skipBotEvents` | action input `skipBotEvents` (default `true`) |
@@ -51,10 +52,11 @@ The manifest script fails immediately when:
 
 1. No valid entrypoint callsite is found.
 2. Multiple `createPlugin` callsites are found.
-3. `settingsSchema` is missing from options.
+3. `TConfig` is not traceable to `StaticDecode<typeof ...>` / `Static<typeof ...>` and options `settingsSchema` cannot be resolved.
 4. `TCommand` is non-null and not traceable to `StaticDecode<typeof ...>` / `Static<typeof ...>`.
 5. `TSupportedEvents` cannot be resolved to string literals.
 6. `excludeSupportedEvents` includes unknown events.
+7. `TConfig`-derived settings schema conflicts with options `settingsSchema`.
 
 ## Event Exclusion
 
