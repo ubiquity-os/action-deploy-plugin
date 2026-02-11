@@ -2,8 +2,9 @@ const fs = require("fs").promises;
 const fsSync = require("fs");
 const path = require("path");
 const { execFile } = require("child_process");
-const { promisify } = require("util");
+const { promisify, isDeepStrictEqual } = require("util");
 const { pathToFileURL } = require("url");
+const ts = require("typescript");
 
 const execFileAsync = promisify(execFile);
 
@@ -1342,6 +1343,508 @@ function parseStaticDecodeTypeAlias(aliasExpression) {
   return match[1];
 }
 
+function isSourceFileInProjectSrc(sourceFile, projectRoot) {
+  if (!sourceFile || !sourceFile.fileName) {
+    return false;
+  }
+
+  const normalizedFile = path.normalize(sourceFile.fileName).toLowerCase();
+  const srcDir = path.join(projectRoot, "src");
+  const normalizedSrcDir = path.normalize(srcDir).toLowerCase();
+  const inSrc =
+    normalizedFile === normalizedSrcDir ||
+    normalizedFile.startsWith(`${normalizedSrcDir}${path.sep}`);
+  const isTsLike =
+    normalizedFile.endsWith(".ts") ||
+    normalizedFile.endsWith(".tsx") ||
+    normalizedFile.endsWith(".mts") ||
+    normalizedFile.endsWith(".cts");
+
+  return (
+    inSrc &&
+    isTsLike &&
+    !normalizedFile.endsWith(".d.ts") &&
+    !normalizedFile.includes(`${path.sep}node_modules${path.sep}`)
+  );
+}
+
+async function createProjectTypeScriptProgram(projectRoot) {
+  const srcDir = path.join(projectRoot, "src");
+  if (!fsSync.existsSync(srcDir)) {
+    throw new Error('Source directory "src" does not exist.');
+  }
+
+  const files = (await listFilesRecursive(srcDir))
+    .filter((file) =>
+      [".ts", ".tsx", ".mts", ".cts"].includes(path.extname(file).toLowerCase()),
+    )
+    .sort((a, b) => a.localeCompare(b));
+
+  if (files.length === 0) {
+    throw new Error('No TypeScript source files were found under "src".');
+  }
+
+  return ts.createProgram({
+    rootNames: files,
+    options: {
+      target: ts.ScriptTarget.ESNext,
+      module: ts.ModuleKind.NodeNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
+      allowJs: true,
+      checkJs: false,
+      resolveJsonModule: true,
+      esModuleInterop: true,
+      allowSyntheticDefaultImports: true,
+      skipLibCheck: true,
+      noEmit: true,
+      types: [],
+    },
+  });
+}
+
+function getCallExpressionName(callExpression) {
+  if (ts.isIdentifier(callExpression.expression)) {
+    return callExpression.expression.text;
+  }
+
+  if (ts.isPropertyAccessExpression(callExpression.expression)) {
+    return callExpression.expression.name.text;
+  }
+
+  return null;
+}
+
+function findEntrypointCallsiteAst(program, projectRoot) {
+  const pluginCallsites = [];
+  const actionCallsites = [];
+
+  for (const sourceFile of program.getSourceFiles()) {
+    if (!isSourceFileInProjectSrc(sourceFile, projectRoot)) {
+      continue;
+    }
+
+    const visit = (node) => {
+      if (ts.isCallExpression(node) && node.typeArguments && node.typeArguments.length > 0) {
+        const functionName = getCallExpressionName(node);
+        if (functionName && ENTRYPOINT_FNS.includes(functionName)) {
+          const callsite = {
+            functionName,
+            filePath: sourceFile.fileName,
+            sourceFile,
+            genericArgs: node.typeArguments.map((arg) => arg.getText(sourceFile).trim()),
+            args: node.arguments.map((arg) => arg.getText(sourceFile).trim()),
+            index: node.getStart(sourceFile),
+            typeArgumentNodes: Array.from(node.typeArguments),
+            argumentNodes: Array.from(node.arguments),
+          };
+
+          if (functionName === "createPlugin") {
+            pluginCallsites.push(callsite);
+          } else {
+            actionCallsites.push(callsite);
+          }
+        }
+      }
+
+      ts.forEachChild(node, visit);
+    };
+
+    visit(sourceFile);
+  }
+
+  if (pluginCallsites.length > 1) {
+    throw new Error(
+      `Multiple createPlugin callsites detected (${pluginCallsites
+        .map((call) => path.relative(projectRoot, call.filePath))
+        .join(", ")}). Exactly one is required.`,
+    );
+  }
+
+  if (pluginCallsites.length === 1) {
+    return pluginCallsites[0];
+  }
+
+  if (actionCallsites.length > 1) {
+    throw new Error(
+      `Multiple createActionsPlugin callsites detected (${actionCallsites
+        .map((call) => path.relative(projectRoot, call.filePath))
+        .join(", ")}). Exactly one is required when createPlugin is absent.`,
+    );
+  }
+
+  if (actionCallsites.length === 1) {
+    return actionCallsites[0];
+  }
+
+  throw new Error(
+    "No createPlugin<...>(...) or createActionsPlugin<...>(...) callsite with explicit generics was found in src/**/*.ts.",
+  );
+}
+
+function unwrapTypeNode(typeNode) {
+  let current = typeNode;
+  while (ts.isParenthesizedTypeNode(current)) {
+    current = current.type;
+  }
+  return current;
+}
+
+function unwrapExpressionNode(expression) {
+  let current = expression;
+  while (current) {
+    if (
+      ts.isParenthesizedExpression(current) ||
+      ts.isAsExpression(current) ||
+      ts.isTypeAssertionExpression(current)
+    ) {
+      current = current.expression;
+      continue;
+    }
+
+    if (
+      typeof ts.isSatisfiesExpression === "function" &&
+      ts.isSatisfiesExpression(current)
+    ) {
+      current = current.expression;
+      continue;
+    }
+
+    break;
+  }
+
+  return current;
+}
+
+function getObjectPropertyName(nameNode) {
+  if (!nameNode) return null;
+  if (ts.isIdentifier(nameNode) || ts.isStringLiteral(nameNode)) {
+    return nameNode.text;
+  }
+  if (ts.isComputedPropertyName(nameNode) && ts.isStringLiteral(nameNode.expression)) {
+    return nameNode.expression.text;
+  }
+  return null;
+}
+
+function getNodeIdentity(node) {
+  const sourceFile = node.getSourceFile();
+  return `${sourceFile.fileName}:${node.pos}:${node.end}`;
+}
+
+function resolveSettingsSchemaFromSymbol(symbol, checker, seen) {
+  if (!symbol) {
+    return null;
+  }
+
+  let targetSymbol = symbol;
+  if ((targetSymbol.flags & ts.SymbolFlags.Alias) !== 0) {
+    try {
+      targetSymbol = checker.getAliasedSymbol(targetSymbol);
+    } catch {
+      return null;
+    }
+  }
+
+  if (!targetSymbol || !targetSymbol.declarations) {
+    return null;
+  }
+
+  for (const declaration of targetSymbol.declarations) {
+    if (ts.isVariableDeclaration(declaration) && declaration.initializer) {
+      const resolved = resolveSettingsSchemaExpressionNode(
+        declaration.initializer,
+        checker,
+        seen,
+      );
+      if (resolved) {
+        return resolved;
+      }
+    }
+
+    if (ts.isPropertyAssignment(declaration)) {
+      const resolved = resolveSettingsSchemaExpressionNode(
+        declaration.initializer,
+        checker,
+        seen,
+      );
+      if (resolved) {
+        return resolved;
+      }
+    }
+
+    if (ts.isShorthandPropertyAssignment(declaration)) {
+      const resolved = resolveSettingsSchemaFromSymbol(
+        checker.getShorthandAssignmentValueSymbol(declaration),
+        checker,
+        seen,
+      );
+      if (resolved) {
+        return resolved;
+      }
+    }
+
+    if (ts.isExportAssignment(declaration)) {
+      const resolved = resolveSettingsSchemaExpressionNode(
+        declaration.expression,
+        checker,
+        seen,
+      );
+      if (resolved) {
+        return resolved;
+      }
+    }
+  }
+
+  return null;
+}
+
+function resolveSettingsSchemaExpressionNode(expression, checker, seen = new Set()) {
+  const normalized = unwrapExpressionNode(expression);
+  const identity = getNodeIdentity(normalized);
+  if (seen.has(identity)) {
+    return null;
+  }
+  seen.add(identity);
+
+  if (ts.isObjectLiteralExpression(normalized)) {
+    let resolved = null;
+
+    for (const property of normalized.properties) {
+      if (ts.isPropertyAssignment(property)) {
+        const key = getObjectPropertyName(property.name);
+        if (key === "settingsSchema") {
+          resolved = unwrapExpressionNode(property.initializer);
+          continue;
+        }
+      }
+
+      if (ts.isShorthandPropertyAssignment(property) && property.name.text === "settingsSchema") {
+        resolved = property.name;
+        continue;
+      }
+
+      if (ts.isSpreadAssignment(property)) {
+        const spreadResolved = resolveSettingsSchemaExpressionNode(
+          property.expression,
+          checker,
+          seen,
+        );
+        if (spreadResolved) {
+          resolved = spreadResolved;
+        }
+      }
+    }
+
+    return resolved;
+  }
+
+  if (ts.isIdentifier(normalized)) {
+    const symbol = checker.getSymbolAtLocation(normalized);
+    return resolveSettingsSchemaFromSymbol(symbol, checker, seen);
+  }
+
+  if (ts.isPropertyAccessExpression(normalized)) {
+    const symbol =
+      checker.getSymbolAtLocation(normalized.name) ||
+      checker.getSymbolAtLocation(normalized);
+    return resolveSettingsSchemaFromSymbol(symbol, checker, seen);
+  }
+
+  return null;
+}
+
+function entityNameToExpressionText(entityName) {
+  if (ts.isIdentifier(entityName)) {
+    return entityName.text;
+  }
+  if (ts.isQualifiedName(entityName)) {
+    const left = entityNameToExpressionText(entityName.left);
+    if (!left) return null;
+    return `${left}.${entityName.right.text}`;
+  }
+  return null;
+}
+
+function extractRuntimeExpressionFromStaticTypeNode(typeNode) {
+  const normalized = unwrapTypeNode(typeNode);
+  if (!ts.isTypeReferenceNode(normalized)) {
+    return null;
+  }
+
+  let typeName = null;
+  if (ts.isIdentifier(normalized.typeName)) {
+    typeName = normalized.typeName.text;
+  } else if (ts.isQualifiedName(normalized.typeName)) {
+    typeName = normalized.typeName.right.text;
+  }
+
+  if (typeName !== "Static" && typeName !== "StaticDecode") {
+    return null;
+  }
+
+  if (!normalized.typeArguments || normalized.typeArguments.length !== 1) {
+    return null;
+  }
+
+  const argumentNode = normalized.typeArguments[0];
+  if (!ts.isTypeQueryNode(argumentNode)) {
+    return null;
+  }
+
+  return entityNameToExpressionText(argumentNode.exprName);
+}
+
+function resolveTypeAliasDeclarationFromTypeNode(typeNode, checker) {
+  const normalized = unwrapTypeNode(typeNode);
+  if (!ts.isTypeReferenceNode(normalized)) {
+    return null;
+  }
+
+  let symbol = checker.getSymbolAtLocation(normalized.typeName);
+  if (!symbol) {
+    return null;
+  }
+
+  if ((symbol.flags & ts.SymbolFlags.Alias) !== 0) {
+    symbol = checker.getAliasedSymbol(symbol);
+  }
+
+  if (!symbol || !symbol.declarations) {
+    return null;
+  }
+
+  const declaration = symbol.declarations.find((decl) =>
+    ts.isTypeAliasDeclaration(decl),
+  );
+  if (!declaration) {
+    return null;
+  }
+
+  return {
+    aliasName: symbol.getName(),
+    declaration,
+  };
+}
+
+async function resolveRuntimeExpressionFromGenericTypeNode(
+  genericTypeNode,
+  checker,
+  projectRoot,
+  sourceCache,
+  options,
+) {
+  const { genericName, entrypoint } = options;
+  const genericText = genericTypeNode.getText(entrypoint.sourceFile).trim();
+  const normalized = unwrapTypeNode(genericTypeNode);
+  const fileLabel = path.relative(projectRoot, entrypoint.filePath);
+
+  if (
+    genericName === "TCommand" &&
+    ts.isLiteralTypeNode(normalized) &&
+    normalized.literal.kind === ts.SyntaxKind.NullKeyword
+  ) {
+    return { isNull: true };
+  }
+
+  const aliasResolution = resolveTypeAliasDeclarationFromTypeNode(
+    normalized,
+    checker,
+  );
+  if (aliasResolution) {
+    const runtimeExpression = extractRuntimeExpressionFromStaticTypeNode(
+      aliasResolution.declaration.type,
+    );
+
+    if (!runtimeExpression) {
+      throw new Error(
+        `${genericName} type alias "${aliasResolution.aliasName}" in ${path.relative(projectRoot, aliasResolution.declaration.getSourceFile().fileName)} must be declared as StaticDecode<typeof X> or Static<typeof X>.`,
+      );
+    }
+
+    return {
+      isNull: false,
+      runtimeExpression,
+      filePath: aliasResolution.declaration.getSourceFile().fileName,
+      aliasName: aliasResolution.aliasName,
+    };
+  }
+
+  const legacyAliasName =
+    ts.isTypeReferenceNode(normalized) && ts.isIdentifier(normalized.typeName)
+      ? normalized.typeName.text
+      : null;
+  if (legacyAliasName) {
+    const resolvedAlias = await resolveTypeAlias(
+      legacyAliasName,
+      entrypoint.filePath,
+      projectRoot,
+      sourceCache,
+    );
+    const runtimeExpression = parseStaticDecodeTypeAlias(resolvedAlias.expression);
+    if (!runtimeExpression) {
+      throw new Error(
+        `${genericName} type alias "${resolvedAlias.aliasName}" in ${path.relative(projectRoot, resolvedAlias.filePath)} must be declared as StaticDecode<typeof X> or Static<typeof X>.`,
+      );
+    }
+
+    return {
+      isNull: false,
+      runtimeExpression,
+      filePath: resolvedAlias.filePath,
+      aliasName: resolvedAlias.aliasName,
+    };
+  }
+
+  throw new Error(
+    `${genericName} generic "${genericText}" in ${fileLabel} must be a traceable type alias.`,
+  );
+}
+
+function getRuntimeReferenceExpressionText(expressionNode, projectRoot) {
+  const normalized = unwrapExpressionNode(expressionNode);
+  if (ts.isIdentifier(normalized)) {
+    return normalized.text;
+  }
+  if (ts.isPropertyAccessExpression(normalized)) {
+    return normalized.getText(normalized.getSourceFile());
+  }
+  throw new Error(
+    `Could not resolve runtime reference from expression "${normalized.getText(normalized.getSourceFile())}" in ${path.relative(projectRoot, normalized.getSourceFile().fileName)}.`,
+  );
+}
+
+function collectStringLiteralTypeValues(type, values, seen = new Set()) {
+  if (!type || seen.has(type)) {
+    return;
+  }
+  seen.add(type);
+
+  if ((type.flags & ts.TypeFlags.StringLiteral) !== 0) {
+    values.push(type.value);
+    return;
+  }
+
+  if (type.isUnion && type.isUnion()) {
+    for (const part of type.types) {
+      collectStringLiteralTypeValues(part, values, seen);
+    }
+    return;
+  }
+
+  if (type.isIntersection && type.isIntersection()) {
+    for (const part of type.types) {
+      collectStringLiteralTypeValues(part, values, seen);
+    }
+  }
+}
+
+function resolveSupportedEventsFromTypeNode(typeNode, checker) {
+  const resolvedType = checker.getTypeFromTypeNode(typeNode);
+  const values = [];
+  collectStringLiteralTypeValues(resolvedType, values);
+  return [...new Set(values)];
+}
+
 async function resolveRuntimeReferenceFromIdentifier(
   identifierExpression,
   filePath,
@@ -1598,88 +2101,149 @@ async function extractManifestMetadataFromEntrypoint(
   excludeSupportedEventsInput = "",
 ) {
   const sourceCache = new Map();
-  const entrypoint = await findEntrypointCallsite(projectRoot);
+  const program = await createProjectTypeScriptProgram(projectRoot);
+  const checker = program.getTypeChecker();
+  const entrypoint = findEntrypointCallsiteAst(program, projectRoot);
 
-  if (entrypoint.genericArgs.length < 4) {
+  if (entrypoint.typeArgumentNodes.length < 4) {
     throw new Error(
       `${entrypoint.functionName} in ${path.relative(projectRoot, entrypoint.filePath)} must provide explicit generic arguments <TConfig, TEnv, TCommand, TSupportedEvents>.`,
     );
   }
 
   const optionsArgIndex = entrypoint.functionName === "createPlugin" ? 2 : 1;
-  const optionsExpression = entrypoint.args[optionsArgIndex];
-  if (!optionsExpression) {
+  const optionsArgNode = entrypoint.argumentNodes[optionsArgIndex];
+  if (!optionsArgNode) {
     throw new Error(
       `${entrypoint.functionName} in ${path.relative(projectRoot, entrypoint.filePath)} is missing the options object argument that must include settingsSchema.`,
     );
   }
 
-  const optionsObject = parseObjectLiteral(optionsExpression);
-  if (!optionsObject) {
-    throw new Error(
-      `Could not parse ${entrypoint.functionName} options object in ${path.relative(projectRoot, entrypoint.filePath)}.`,
+  let pluginSettingsSchema;
+  let settingsSchemaResolvedFrom = null;
+  let tConfigError = null;
+
+  try {
+    const configTypeResolution = await resolveRuntimeExpressionFromGenericTypeNode(
+      entrypoint.typeArgumentNodes[0],
+      checker,
+      projectRoot,
+      sourceCache,
+      { genericName: "TConfig", entrypoint },
     );
-  }
-
-  if (!optionsObject.properties.has("settingsSchema")) {
-    throw new Error(
-      `${entrypoint.functionName} options in ${path.relative(projectRoot, entrypoint.filePath)} must include a direct "settingsSchema" property.`,
-    );
-  }
-
-  const settingsSchemaExpr = optionsObject.properties.get("settingsSchema");
-  const settingsSchemaRef = await resolveRuntimeReferenceFromIdentifier(
-    settingsSchemaExpr,
-    entrypoint.filePath,
-    projectRoot,
-    sourceCache,
-  );
-  const pluginSettingsSchema = await loadRuntimeReferenceValue(
-    settingsSchemaRef,
-    projectRoot,
-  );
-
-  const commandTypeExpr = entrypoint.genericArgs[2];
-  const normalizedCommandType = stripOuterParens(commandTypeExpr).trim();
-  let commandSchema;
-  let allowMissingCommandSchema = false;
-
-  if (normalizedCommandType === "null") {
-    allowMissingCommandSchema = true;
-  } else if (/^[A-Za-z_$][\w$]*$/.test(normalizedCommandType)) {
-    const alias = await resolveTypeAlias(
-      normalizedCommandType,
-      entrypoint.filePath,
+    const configSchemaRef = await resolveRuntimeReferenceFromIdentifier(
+      configTypeResolution.runtimeExpression,
+      configTypeResolution.filePath,
       projectRoot,
       sourceCache,
     );
-    const commandSchemaSymbol = parseStaticDecodeTypeAlias(alias.expression);
-    if (!commandSchemaSymbol) {
-      throw new Error(
-        `Command type alias "${alias.aliasName}" in ${path.relative(projectRoot, alias.filePath)} must be declared as StaticDecode<typeof X> or Static<typeof X>.`,
-      );
-    }
+    pluginSettingsSchema = await loadRuntimeReferenceValue(
+      configSchemaRef,
+      projectRoot,
+    );
+    settingsSchemaResolvedFrom = "TConfig";
+  } catch (error) {
+    tConfigError = error;
+  }
 
+  let pluginSettingsSchemaFromOptions;
+  const optionsSettingsSchemaNode = resolveSettingsSchemaExpressionNode(
+    optionsArgNode,
+    checker,
+  );
+  if (optionsSettingsSchemaNode) {
+    const settingsSchemaExpr = getRuntimeReferenceExpressionText(
+      optionsSettingsSchemaNode,
+      projectRoot,
+    );
+    const settingsSchemaRef = await resolveRuntimeReferenceFromIdentifier(
+      settingsSchemaExpr,
+      optionsSettingsSchemaNode.getSourceFile().fileName,
+      projectRoot,
+      sourceCache,
+    );
+    pluginSettingsSchemaFromOptions = await loadRuntimeReferenceValue(
+      settingsSchemaRef,
+      projectRoot,
+    );
+  }
+
+  if (!pluginSettingsSchema && pluginSettingsSchemaFromOptions !== undefined) {
+    pluginSettingsSchema = pluginSettingsSchemaFromOptions;
+    settingsSchemaResolvedFrom = "options";
+  }
+
+  if (
+    pluginSettingsSchema !== undefined &&
+    pluginSettingsSchemaFromOptions !== undefined &&
+    !isDeepStrictEqual(pluginSettingsSchema, pluginSettingsSchemaFromOptions)
+  ) {
+    throw new Error(
+      `${entrypoint.functionName} options in ${path.relative(projectRoot, entrypoint.filePath)} provide a settingsSchema that does not match the TConfig generic contract.`,
+    );
+  }
+
+  if (pluginSettingsSchema === undefined) {
+    const details =
+      tConfigError && tConfigError.message
+        ? ` TConfig resolution failed: ${tConfigError.message}`
+        : "";
+    throw new Error(
+      `${entrypoint.functionName} options in ${path.relative(projectRoot, entrypoint.filePath)} must include a resolvable "settingsSchema" value (directly or via spread).${details}`,
+    );
+  }
+
+  if (settingsSchemaResolvedFrom === "options" && tConfigError) {
+    warning(
+      `manifest.configuration: falling back to options.settingsSchema because TConfig resolution failed (${tConfigError.message}).`,
+    );
+  }
+
+  const commandTypeNode = entrypoint.typeArgumentNodes[2];
+  const commandTypeExpr = commandTypeNode.getText(entrypoint.sourceFile).trim();
+  let commandSchema;
+  let allowMissingCommandSchema = false;
+
+  const commandTypeResolution = await resolveRuntimeExpressionFromGenericTypeNode(
+    commandTypeNode,
+    checker,
+    projectRoot,
+    sourceCache,
+    { genericName: "TCommand", entrypoint },
+  );
+  if (commandTypeResolution.isNull) {
+    allowMissingCommandSchema = true;
+  } else {
     const commandSchemaRef = await resolveRuntimeReferenceFromIdentifier(
-      commandSchemaSymbol,
-      alias.filePath,
+      commandTypeResolution.runtimeExpression,
+      commandTypeResolution.filePath,
       projectRoot,
       sourceCache,
     );
     commandSchema = await loadRuntimeReferenceValue(commandSchemaRef, projectRoot);
-  } else {
-    throw new Error(
-      `TCommand generic "${commandTypeExpr}" in ${path.relative(projectRoot, entrypoint.filePath)} must be "null" or a traceable type alias.`,
-    );
   }
 
-  const supportedEventsExpr = entrypoint.genericArgs[3];
-  const supportedEvents = await resolveSupportedEventsFromTypeExpression(
-    supportedEventsExpr,
-    entrypoint.filePath,
-    projectRoot,
-    sourceCache,
+  const supportedEventsNode = entrypoint.typeArgumentNodes[3];
+  const supportedEventsExpr = supportedEventsNode
+    .getText(entrypoint.sourceFile)
+    .trim();
+  let supportedEvents = resolveSupportedEventsFromTypeNode(
+    supportedEventsNode,
+    checker,
   );
+
+  if (!supportedEvents.length) {
+    try {
+      supportedEvents = await resolveSupportedEventsFromTypeExpression(
+        supportedEventsExpr,
+        entrypoint.filePath,
+        projectRoot,
+        sourceCache,
+      );
+    } catch {
+      // fall through to strict error below
+    }
+  }
 
   if (!supportedEvents.length) {
     throw new Error(
