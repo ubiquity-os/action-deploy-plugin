@@ -72,13 +72,15 @@ function scaffoldStandardPlugin(projectRoot, options = {}) {
     projectRoot,
     "src/schemas.mjs",
     schemasSource ||
-      `export const settingsRuntimeSchema = {
+      `export const pluginSettingsSchema = {
   type: "object",
   properties: {
     greeting: { type: "string", default: "hello" }
   },
   required: ["greeting"]
 };
+
+export const settingsRuntimeSchema = pluginSettingsSchema;
 
 export const commandRuntimeSchema = {
   start: {
@@ -94,9 +96,9 @@ export const commandRuntimeSchema = {
     "src/types.ts",
     typesSource ||
       `import type { StaticDecode } from "@sinclair/typebox";
-import { commandRuntimeSchema } from "./schemas.mjs";
+import { pluginSettingsSchema, commandRuntimeSchema } from "./schemas.mjs";
 
-export type PluginConfig = { enabled: boolean };
+export type PluginConfig = StaticDecode<typeof pluginSettingsSchema>;
 export type PluginContext = { eventName: string };
 export type CommandInput = StaticDecode<typeof commandRuntimeSchema>;
 export type SupportedEvents =
@@ -629,9 +631,105 @@ createPlugin({}, {}, { settingsSchema: {} });
     );
   });
 
-  it("fails when settingsSchema is missing in options", async () => {
+  it("resolves settingsSchema from spread options objects", async () => {
+    const projectRoot = createProject("settings-schema-spread");
+    scaffoldStandardPlugin(projectRoot, {
+      entrypointSource: `import { createPlugin } from "@ubiquity-os/plugin-sdk/worker";
+import type {
+  PluginConfig,
+  PluginContext,
+  CommandInput,
+  SupportedEvents,
+} from "./types";
+import { pluginRuntimeSchemas } from "./plugin-runtime-options";
+
+export const plugin = createPlugin<
+  PluginConfig,
+  PluginContext,
+  CommandInput,
+  SupportedEvents
+>(
+  {} ,
+  {},
+  {
+    postCommentOnError: true,
+    ...pluginRuntimeSchemas,
+  },
+);
+`,
+    });
+
+    writeProjectFile(
+      projectRoot,
+      "src/plugin-runtime-options.ts",
+      `import { settingsRuntimeSchema } from "./schemas.mjs";
+
+export const pluginRuntimeSchemas = {
+  settingsSchema: settingsRuntimeSchema,
+};
+`,
+    );
+
+    const metadata = await extractManifestMetadataFromEntrypoint(projectRoot);
+    assert.deepEqual(metadata.pluginSettingsSchema, {
+      type: "object",
+      properties: {
+        greeting: { type: "string", default: "hello" },
+      },
+      required: ["greeting"],
+    });
+  });
+
+  it("resolves settingsSchema from TConfig when options omit it", async () => {
+    const projectRoot = createProject("settings-schema-from-tconfig");
+    scaffoldStandardPlugin(projectRoot, {
+      entrypointSource: `import { createPlugin } from "@ubiquity-os/plugin-sdk/worker";
+import type {
+  PluginConfig,
+  PluginContext,
+  CommandInput,
+  SupportedEvents,
+} from "./types";
+
+export const plugin = createPlugin<
+  PluginConfig,
+  PluginContext,
+  CommandInput,
+  SupportedEvents
+>(
+  {},
+  {},
+  {
+    postCommentOnError: true,
+  },
+);
+`,
+    });
+
+    const metadata = await extractManifestMetadataFromEntrypoint(projectRoot);
+    assert.deepEqual(metadata.pluginSettingsSchema, {
+      type: "object",
+      properties: {
+        greeting: { type: "string", default: "hello" },
+      },
+      required: ["greeting"],
+    });
+  });
+
+  it("fails when settingsSchema cannot be resolved from options or TConfig", async () => {
     const projectRoot = createProject("missing-settings-schema");
     scaffoldStandardPlugin(projectRoot, {
+      typesSource: `import type { StaticDecode } from "@sinclair/typebox";
+import { commandRuntimeSchema } from "./schemas.mjs";
+
+export type PluginConfig = { enabled: boolean };
+export type PluginContext = { eventName: string };
+export type CommandInput = StaticDecode<typeof commandRuntimeSchema>;
+export type SupportedEvents =
+  | "issue_comment.created"
+  | "pull_request.opened"
+  | "issues.labeled";
+`,
       entrypointSource: `import { createPlugin } from "@ubiquity-os/plugin-sdk/worker";
 import { settingsRuntimeSchema } from "./schemas.mjs";
 import type {
@@ -658,14 +756,17 @@ export const plugin = createPlugin<
 
     await assert.rejects(
       () => extractManifestMetadataFromEntrypoint(projectRoot),
-      /must include a direct "settingsSchema" property/i,
+      /must include a resolvable "settingsSchema" value/i,
     );
   });
 
   it("fails when command type alias is not StaticDecode/Static<typeof ...>", async () => {
     const projectRoot = createProject("invalid-command-alias");
     scaffoldStandardPlugin(projectRoot, {
-      typesSource: `export type PluginConfig = { enabled: boolean };
+      typesSource: `import type { StaticDecode } from "@sinclair/typebox";
+import { pluginSettingsSchema } from "./schemas.mjs";
+
+export type PluginConfig = StaticDecode<typeof pluginSettingsSchema>;
 export type PluginContext = { eventName: string };
 export type CommandInput = { foo: string };
 export type SupportedEvents = "issue_comment.created" | "pull_request.opened";
@@ -682,9 +783,9 @@ export type SupportedEvents = "issue_comment.created" | "pull_request.opened";
     const projectRoot = createProject("invalid-supported-events");
     scaffoldStandardPlugin(projectRoot, {
       typesSource: `import type { StaticDecode } from "@sinclair/typebox";
-import { commandRuntimeSchema } from "./schemas.mjs";
+import { pluginSettingsSchema, commandRuntimeSchema } from "./schemas.mjs";
 
-export type PluginConfig = { enabled: boolean };
+export type PluginConfig = StaticDecode<typeof pluginSettingsSchema>;
 export type PluginContext = { eventName: string };
 export type CommandInput = StaticDecode<typeof commandRuntimeSchema>;
 export type SupportedEvents = number;
@@ -693,7 +794,7 @@ export type SupportedEvents = number;
 
     await assert.rejects(
       () => extractManifestMetadataFromEntrypoint(projectRoot),
-      /Could not resolve type alias "number"|not a string-literal union/i,
+      /No supported events were resolved from generic/i,
     );
   });
 });
@@ -704,7 +805,8 @@ describe("cross-file type and runtime resolution", () => {
     writeProjectFile(
       projectRoot,
       "src/schemas.mjs",
-      `export const settingsRuntimeSchema = { type: "object", properties: {} };
+      `export const pluginSettingsSchema = { type: "object", properties: {} };
+export const settingsRuntimeSchema = pluginSettingsSchema;
 export const commandRuntimeSchema = {
   ping: { description: "Ping", "ubiquity:example": "/ping" }
 };
@@ -722,10 +824,10 @@ export const commandRuntimeSchema = {
       projectRoot,
       "src/types.ts",
       `import type { StaticDecode } from "@sinclair/typebox";
-import { commandRuntimeSchema } from "./schemas.mjs";
+import { settingsRuntimeSchema, commandRuntimeSchema } from "./schemas.mjs";
 import type { AppEvents } from "./events";
 
-export type PluginConfig = {};
+export type PluginConfig = StaticDecode<typeof settingsRuntimeSchema>;
 export type PluginContext = {};
 export type CommandInput = StaticDecode<typeof commandRuntimeSchema>;
 export type SupportedEvents = AppEvents;
