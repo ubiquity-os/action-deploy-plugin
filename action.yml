@@ -54,6 +54,14 @@ outputs: {}
 runs:
   using: "composite"
   steps:
+    - name: Validate action input
+      shell: bash
+      run: |
+        if [[ "${{ inputs.action }}" != "publish" && "${{ inputs.action }}" != "delete" ]]; then
+          echo "::error::Invalid action '${{ inputs.action }}'. Must be 'publish' or 'delete'."
+          exit 1
+        fi
+
     - name: Check out the repository
       uses: actions/checkout@v6
 
