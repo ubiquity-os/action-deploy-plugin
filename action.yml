@@ -1,6 +1,10 @@
 name: "Update Manifest and Commit Changes"
 description: "Checks out the repository, sets up Node, installs dependencies, updates manifest.json, formats, and commits/pushes changes signing the commit."
 inputs:
+  action:
+    description: "Action to perform: publish or delete the artifact branch."
+    required: false
+    default: "publish"
   manifestPath:
     description: "The path to the manifest.json file."
     required: false
@@ -17,6 +21,14 @@ inputs:
     description: "The commit message."
     required: false
     default: "chore: [skip ci] updated manifest.json and dist build"
+  sourceRef:
+    description: "Source branch ref used for short_name and artifact branch mapping."
+    required: false
+    default: "${{ github.event.workflow_run.head_branch || github.ref_name }}"
+  artifactPrefix:
+    description: "Prefix used for artifact branches."
+    required: false
+    default: "dist/"
   nodeVersion:
     description: "The version of Node.js to use."
     default: "24.11.0"
@@ -61,6 +73,7 @@ runs:
         bun install --frozen-lockfile
 
     - name: Build project
+      if: ${{ inputs.action == 'publish' }}
       shell: bash
       run: |
         echo "Deleting previous dist..."
@@ -79,7 +92,7 @@ runs:
         fi
 
     - name: Replace __dirname with import.meta.dirname
-      if: ${{ inputs.treatAsEsm }}
+      if: ${{ inputs.action == 'publish' && inputs.treatAsEsm }}
       shell: bash
       run: |
         if [ "${{ inputs.treatAsEsm }}" = "true" ]; then
@@ -87,6 +100,7 @@ runs:
         fi
 
     - name: Update manifest configuration JSON
+      if: ${{ inputs.action == 'publish' }}
       shell: bash
       env:
         MANIFEST_PATH: ${{ inputs.manifestPath }}
@@ -94,11 +108,12 @@ runs:
         EXCLUDE_SUPPORTED_EVENTS: ${{ inputs.excludeSupportedEvents }}
         GITHUB_WORKSPACE: ${{ github.workspace }}
         GITHUB_REPOSITORY: ${{ github.repository }}
-        GITHUB_REF_NAME: ${{ github.ref_name }}
+        GITHUB_REF_NAME: ${{ inputs.sourceRef }}
       run: |
         node ${{ github.action_path }}/.github/scripts/update-manifest.js
 
     - name: Format manifest using Prettier
+      if: ${{ inputs.action == 'publish' }}
       shell: bash
       run: |
         npx prettier --write manifest.json
@@ -119,6 +134,7 @@ runs:
         bun install
 
     - name: Inject reassembly code into dist/index.js
+      if: ${{ inputs.action == 'publish' }}
       shell: bash
       env:
         TREAT_AS_ESM: ${{ inputs.treatAsEsm }}
@@ -133,26 +149,25 @@ runs:
           cp "${{ github.action_path }}/.github/scripts/reassembly-cjs.js" dist/index.js
         fi
 
-    - name: Update manifest.json and dist folder
+    - name: Publish manifest.json and dist to artifact branch
+      if: ${{ inputs.action == 'publish' }}
       shell: bash
       env:
         GITHUB_TOKEN: ${{ steps.get_installation_token.outputs.token || github.token }}
         GITHUB_WORKSPACE: ${{ github.workspace }}
         COMMIT_MESSAGE: ${{ inputs.commitMessage }}
         MANIFEST_PATH: ${{ inputs.manifestPath }}
-        GITHUB_REF_NAME: ${{ github.ref_name }}
+        SOURCE_REF: ${{ inputs.sourceRef }}
+        ARTIFACT_PREFIX: ${{ inputs.artifactPrefix }}
       run: |
-        # Stage files using git commands
-        git add "${{ inputs.manifestPath }}"
-        find ${{ github.workspace }}/dist \( -name "*.js" -o -name "*.cjs" -o -name "*.map" -o -name "*.json" \) -print0 | xargs -0 git add -f
-        find ${{ github.workspace }}/dist/plugin \( -name "*.js" -o -name "*.cjs" -o -name "*.map" -o -name "*.json" \) -print0 | xargs -0 git add -f
+        bun ${{ github.action_path }}/.github/scripts/push-changes.js
 
-        echo "Checking for staged changes..."
-        # Check if git add actually staged anything
-        if ! git diff --cached --quiet; then
-          echo "Changes detected. Committing and pushing..."
-          bun ${{ github.action_path }}/.github/scripts/push-changes.js
-          echo "Changes committed and pushed successfully."
-        else
-          echo "No changes detected in manifest or dist folder."
-        fi
+    - name: Delete artifact branch
+      if: ${{ inputs.action == 'delete' }}
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ steps.get_installation_token.outputs.token || github.token }}
+        SOURCE_REF: ${{ inputs.sourceRef }}
+        ARTIFACT_PREFIX: ${{ inputs.artifactPrefix }}
+      run: |
+        bun ${{ github.action_path }}/.github/scripts/delete-artifact-branch.js
