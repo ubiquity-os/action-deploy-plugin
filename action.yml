@@ -63,7 +63,10 @@ runs:
         fi
 
     - name: Check out the repository
+      if: ${{ inputs.action == 'publish' }}
       uses: actions/checkout@v6
+      with:
+        ref: ${{ inputs.sourceRef }}
 
     - name: Set up Node.js
       uses: actions/setup-node@v6
@@ -78,6 +81,7 @@ runs:
     - uses: oven-sh/setup-bun@v2
 
     - name: Install dependencies
+      if: ${{ inputs.action == 'publish' }}
       shell: bash
       run: |
         bun install --frozen-lockfile
