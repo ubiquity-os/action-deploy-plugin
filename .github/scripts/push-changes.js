@@ -160,6 +160,9 @@ async function pushChanges() {
   const githubToken = getRequiredEnv("GITHUB_TOKEN");
   const githubWorkspace = getRequiredEnv("GITHUB_WORKSPACE");
   const sourceRef = process.env.SOURCE_REF || process.env.GITHUB_REF_NAME;
+  if (!sourceRef || !sourceRef.trim()) {
+    throw new Error("Missing SOURCE_REF or GITHUB_REF_NAME environment variable");
+  }
   const artifactPrefix = process.env.ARTIFACT_PREFIX || "dist/";
 
   const octokit = github.getOctokit(githubToken);
