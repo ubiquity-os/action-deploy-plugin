@@ -237,19 +237,6 @@ function customReviver(_key, value) {
         delete value.required;
       }
     }
-
-    if (Array.isArray(value)) {
-      return value.map((item) =>
-        JSON.parse(JSON.stringify(item), customReviver),
-      );
-    }
-
-    return Object.fromEntries(
-      Object.entries(value).map(([k, v]) => [
-        k,
-        JSON.parse(JSON.stringify(v), customReviver),
-      ]),
-    );
   }
   return value;
 }
@@ -799,9 +786,9 @@ function normalizeObjectKey(rawKey) {
   if (/^[A-Za-z_$][\w$]*$/.test(key)) {
     return key;
   }
-  const quoted = key.match(/^["']([^"']+)["']$/);
+  const quoted = key.match(/^(["'])(.+)\1$/);
   if (quoted) {
-    return quoted[1];
+    return quoted[2];
   }
   return null;
 }
@@ -985,14 +972,191 @@ function parseReexports(content) {
 
 function parseTypeAliases(content) {
   const aliases = new Map();
-  const typeAliasRegex = /(?:export\s+)?type\s+([A-Za-z_$][\w$]*)\s*=\s*([\s\S]*?);/g;
 
-  let match;
-  while ((match = typeAliasRegex.exec(content)) !== null) {
-    aliases.set(match[1], match[2].trim());
+  // Matches `type Alias` declarations at line starts. The RHS is parsed manually
+  // so we can support semicolonless style and nested `;` within object types.
+  const typeAliasStartRegex =
+    /(?:^|[\r\n])\s*(?:export\s+)?(?:declare\s+)?type\s+([A-Za-z_$][\w$]*)\b/g;
+
+  let startMatch;
+  while ((startMatch = typeAliasStartRegex.exec(content)) !== null) {
+    const aliasName = startMatch[1];
+    let equalsIndex = -1;
+
+    let parenDepth = 0;
+    let braceDepth = 0;
+    let bracketDepth = 0;
+    let angleDepth = 0;
+
+    for (let i = typeAliasStartRegex.lastIndex; i < content.length; i++) {
+      const char = content[i];
+      const next = content[i + 1];
+
+      if (char === "'" || char === '"' || char === "`") {
+        i = skipStringLiteral(content, i);
+        continue;
+      }
+
+      if (char === "/" && next === "/") {
+        while (i < content.length && content[i] !== "\n") i++;
+        continue;
+      }
+
+      if (char === "/" && next === "*") {
+        i += 2;
+        while (
+          i < content.length - 1 &&
+          !(content[i] === "*" && content[i + 1] === "/")
+        ) {
+          i++;
+        }
+        i++;
+        continue;
+      }
+
+      if (char === "(") parenDepth++;
+      else if (char === ")" && parenDepth > 0) parenDepth--;
+      else if (char === "{") braceDepth++;
+      else if (char === "}" && braceDepth > 0) braceDepth--;
+      else if (char === "[") bracketDepth++;
+      else if (char === "]" && bracketDepth > 0) bracketDepth--;
+      else if (char === "<") angleDepth++;
+      else if (char === ">" && angleDepth > 0) angleDepth--;
+
+      if (
+        char === "=" &&
+        parenDepth === 0 &&
+        braceDepth === 0 &&
+        bracketDepth === 0 &&
+        angleDepth === 0
+      ) {
+        equalsIndex = i;
+        break;
+      }
+    }
+
+    if (equalsIndex === -1) {
+      continue;
+    }
+
+    const expressionStart = equalsIndex + 1;
+    const expressionEnd = findTypeAliasTerminator(content, expressionStart);
+    const expression = content.slice(expressionStart, expressionEnd).trim();
+    if (expression.length > 0) {
+      aliases.set(aliasName, expression);
+      typeAliasStartRegex.lastIndex = expressionEnd;
+    }
   }
 
   return aliases;
+}
+
+function skipWhitespaceAndComments(input, startIndex) {
+  let i = startIndex;
+  while (i < input.length) {
+    const char = input[i];
+    const next = input[i + 1];
+
+    if (/\s/.test(char)) {
+      i++;
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      i += 2;
+      while (i < input.length && input[i] !== "\n") i++;
+      continue;
+    }
+
+    if (char === "/" && next === "*") {
+      i += 2;
+      while (i < input.length - 1 && !(input[i] === "*" && input[i + 1] === "/")) {
+        i++;
+      }
+      i += 2;
+      continue;
+    }
+
+    break;
+  }
+
+  return i;
+}
+
+function isTypeDeclarationBoundary(input, startIndex) {
+  const rest = input.slice(startIndex);
+  return /^(?:export\s+)?(?:declare\s+)?(?:type|interface|class|function|const|let|var|enum|namespace|import)\b/.test(
+    rest,
+  );
+}
+
+function findTypeAliasTerminator(input, startIndex) {
+  let parenDepth = 0;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  let angleDepth = 0;
+
+  for (let i = startIndex; i < input.length; i++) {
+    const char = input[i];
+    const next = input[i + 1];
+    const previousBraceDepth = braceDepth;
+
+    if (char === "'" || char === '"' || char === "`") {
+      i = skipStringLiteral(input, i);
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      while (i < input.length && input[i] !== "\n") i++;
+      continue;
+    }
+
+    if (char === "/" && next === "*") {
+      i += 2;
+      while (i < input.length - 1 && !(input[i] === "*" && input[i + 1] === "/")) {
+        i++;
+      }
+      i++;
+      continue;
+    }
+
+    if (char === "(") parenDepth++;
+    else if (char === ")" && parenDepth > 0) parenDepth--;
+    else if (char === "{") braceDepth++;
+    else if (char === "}" && braceDepth > 0) braceDepth--;
+    else if (char === "[") bracketDepth++;
+    else if (char === "]" && bracketDepth > 0) bracketDepth--;
+    else if (char === "<") angleDepth++;
+    else if (char === ">" && angleDepth > 0) angleDepth--;
+
+    if (
+      parenDepth === 0 &&
+      braceDepth === 0 &&
+      bracketDepth === 0 &&
+      angleDepth === 0
+    ) {
+      if (char === ";") {
+        return i;
+      }
+
+      if (char === "}" && previousBraceDepth === 0) {
+        return i;
+      }
+
+      if (char === "\n" || char === "\r") {
+        const nextIndex = skipWhitespaceAndComments(input, i + 1);
+        if (nextIndex >= input.length) {
+          return input.length;
+        }
+
+        if (input[nextIndex] === "}" || isTypeDeclarationBoundary(input, nextIndex)) {
+          return i;
+        }
+      }
+    }
+  }
+
+  return input.length;
 }
 
 async function readParsedSource(filePath, cache) {
@@ -1119,10 +1283,15 @@ async function resolveTypeAlias(aliasName, filePath, projectRoot, cache, seen = 
 
 function extractStringLiterals(input) {
   const literals = [];
-  const literalRegex = /["']([^"']+)["']/g;
+  const literalRegex = /(["'])(?:\\.|(?!\1)[^\\\r\n])*\1/g;
   let match;
   while ((match = literalRegex.exec(input)) !== null) {
-    literals.push(match[1]);
+    const quote = match[1];
+    const rawLiteral = match[0].slice(1, -1);
+    const normalizedLiteral = rawLiteral
+      .replace(new RegExp(`\\\\${quote}`, "g"), quote)
+      .replace(/\\\\/g, "\\");
+    literals.push(normalizedLiteral);
   }
   return [...new Set(literals)];
 }
@@ -1373,6 +1542,7 @@ console.log(${JSON.stringify(DENO_OUTPUT_PREFIX)} + JSON.stringify(out));
       ["eval", "--quiet", script],
       {
         maxBuffer: 20 * 1024 * 1024,
+        timeout: 60_000,
       },
     );
 
@@ -1470,14 +1640,15 @@ async function extractManifestMetadataFromEntrypoint(
   );
 
   const commandTypeExpr = entrypoint.genericArgs[2];
+  const normalizedCommandType = stripOuterParens(commandTypeExpr).trim();
   let commandSchema;
   let allowMissingCommandSchema = false;
 
-  if (stripOuterParens(commandTypeExpr).trim() === "null") {
+  if (normalizedCommandType === "null") {
     allowMissingCommandSchema = true;
-  } else if (/^[A-Za-z_$][\w$]*$/.test(stripOuterParens(commandTypeExpr).trim())) {
+  } else if (/^[A-Za-z_$][\w$]*$/.test(normalizedCommandType)) {
     const alias = await resolveTypeAlias(
-      stripOuterParens(commandTypeExpr).trim(),
+      normalizedCommandType,
       entrypoint.filePath,
       projectRoot,
       sourceCache,
@@ -1590,7 +1761,7 @@ async function formatManifestWithPrettier(manifestPath, cwd) {
   try {
     await execFileAsync(
       npxCommand,
-      ["--yes", "prettier", "--write", manifestPath],
+      ["prettier", "--write", manifestPath],
       { cwd, maxBuffer: 20 * 1024 * 1024 },
     );
     return true;
