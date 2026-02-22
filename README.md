@@ -11,7 +11,7 @@ Builds a Ubiquity plugin, generates `manifest.json` metadata from source TypeScr
 | `schemaPath` | No | `${{ github.workspace }}/src/types/plugin-input.ts` | Source schema entrypoint used for build artifacts. |
 | `pluginEntry` | No | `${{ github.workspace }}/src/index.ts` | Plugin runtime entrypoint used during build. |
 | `commitMessage` | No | `chore: [skip ci] updated manifest.json and dist build` | Commit message for generated changes. |
-| `sourceRef` | No | `${{ github.event.workflow_run.head_branch || github.ref_name }}` | Source branch used for `short_name` and artifact branch mapping. |
+| `sourceRef` | No | `${{ github.event.workflow_run.head_branch &#124;&#124; github.ref_name }}` | Source branch used for `short_name` and artifact branch mapping. |
 | `artifactPrefix` | No | `dist/` | Prefix for artifact branch names (`dist/<sourceRef>`). |
 | `nodeVersion` | No | `24.11.0` | Node version used by the action. |
 | `treatAsEsm` | No | `false` | Replaces `__dirname` with `import.meta.dirname` in built output. |
