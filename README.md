@@ -27,6 +27,7 @@ Builds a Ubiquity plugin, generates `manifest.json` metadata from source TypeScr
 - Generated files are committed to the artifact branch only:
   - `manifest.json` at branch root
   - build outputs under `dist/**`
+- The artifact branch tree is reduced to generated outputs only (`manifest.json` and `dist/**`).
 - Source branches no longer receive generated `dist/**` or generated `manifest.json` commits.
 
 ## Manifest Generation Contract

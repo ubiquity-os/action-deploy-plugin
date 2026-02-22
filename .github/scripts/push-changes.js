@@ -127,7 +127,7 @@ function collectTreeEntries({ githubWorkspace, manifestPathInput }) {
   return treeEntries;
 }
 
-async function createTreeFromEntries(octokit, owner, repo, baseTreeSha, treeEntries) {
+async function createTreeFromEntries(octokit, owner, repo, treeEntries) {
   const blobs = [];
   for (const entry of treeEntries) {
     const blob = await octokit.rest.git.createBlob({
@@ -147,7 +147,6 @@ async function createTreeFromEntries(octokit, owner, repo, baseTreeSha, treeEntr
   const tree = await octokit.rest.git.createTree({
     owner,
     repo,
-    base_tree: baseTreeSha,
     tree: blobs,
   });
 
@@ -193,7 +192,6 @@ async function pushChanges() {
     octokit,
     owner,
     repo,
-    parentCommit.data.tree.sha,
     treeEntries
   );
 
