@@ -1,21 +1,35 @@
 # @ubiquity-os/action-deploy-plugin
 
-Builds a Ubiquity plugin, generates `manifest.json` metadata from source TypeScript entrypoint contracts, formats output, and commits/pushes changes.
+Builds a Ubiquity plugin, generates `manifest.json` metadata from source TypeScript entrypoint contracts, and publishes generated outputs to an artifact branch.
 
 ## Inputs
 
 | Input | Required | Default | Description |
 | --- | --- | --- | --- |
+| `action` | No | `publish` | `publish` writes generated files to an artifact branch; `delete` removes the paired artifact branch. |
 | `manifestPath` | No | `${{ github.workspace }}/manifest.json` | Path to the target manifest file. |
 | `schemaPath` | No | `${{ github.workspace }}/src/types/plugin-input.ts` | Source schema entrypoint used for build artifacts. |
 | `pluginEntry` | No | `${{ github.workspace }}/src/index.ts` | Plugin runtime entrypoint used during build. |
 | `commitMessage` | No | `chore: [skip ci] updated manifest.json and dist build` | Commit message for generated changes. |
+| `sourceRef` | No | `${{ github.event.workflow_run.head_branch &#124;&#124; github.ref_name }}` | Source branch used for `short_name` and artifact branch mapping. |
+| `artifactPrefix` | No | `dist/` | Prefix for artifact branch names (`dist/<sourceRef>`). |
 | `nodeVersion` | No | `24.11.0` | Node version used by the action. |
 | `treatAsEsm` | No | `false` | Replaces `__dirname` with `import.meta.dirname` in built output. |
 | `bundleSingleFile` | No | `false` | Enables single-file esbuild bundling. |
 | `sourcemap` | No | `false` | Generates source maps for build output. |
 | `skipBotEvents` | No | `true` | Sets `manifest.skipBotEvents` (`true`/`false`). |
 | `excludeSupportedEvents` | No | `""` | Comma-separated listener events to remove from generated `ubiquity:listeners`. |
+
+## Artifact Branch Model
+
+- Source branch `R` maps to artifact branch `dist/R`.
+- If `sourceRef` already starts with `dist/`, it is used as-is (no `dist/dist/...`).
+- Generated files are committed to the artifact branch only:
+  - `manifest.json` at branch root
+  - build outputs under `dist/**`
+- The artifact branch tree is reduced to generated outputs only (`manifest.json` and `dist/**`).
+- Source branches no longer receive generated `dist/**` or generated `manifest.json` commits.
+- In CI publish runs, manifest generation executes before build so projects importing `manifest.json` can compile even when the file is not tracked on the source branch.
 
 ## Manifest Generation Contract
 
@@ -76,3 +90,4 @@ node .github/scripts/update-manifest.js /absolute/path/to/plugin-project
 ```
 
 This command reads source under `src/`, updates `manifest.json`, and formats it with Prettier.
+If your repository does not track `manifest.json`, run this command as a local prepare step before build/test commands.
