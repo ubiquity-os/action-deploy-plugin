@@ -86,6 +86,19 @@ runs:
       run: |
         bun install --frozen-lockfile
 
+    - name: Prepare manifest configuration JSON
+      if: ${{ inputs.action == 'publish' }}
+      shell: bash
+      env:
+        MANIFEST_PATH: ${{ inputs.manifestPath }}
+        SKIP_BOT_EVENTS: ${{ inputs.skipBotEvents }}
+        EXCLUDE_SUPPORTED_EVENTS: ${{ inputs.excludeSupportedEvents }}
+        GITHUB_WORKSPACE: ${{ github.workspace }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_REF_NAME: ${{ inputs.sourceRef }}
+      run: |
+        node ${{ github.action_path }}/.github/scripts/update-manifest.js
+
     - name: Build project
       if: ${{ inputs.action == 'publish' }}
       shell: bash
@@ -112,19 +125,6 @@ runs:
         if [ "${{ inputs.treatAsEsm }}" = "true" ]; then
           sed -i 's/__dirname/import.meta.dirname/g' "${{ github.workspace }}/dist/plugin/index.js"
         fi
-
-    - name: Update manifest configuration JSON
-      if: ${{ inputs.action == 'publish' }}
-      shell: bash
-      env:
-        MANIFEST_PATH: ${{ inputs.manifestPath }}
-        SKIP_BOT_EVENTS: ${{ inputs.skipBotEvents }}
-        EXCLUDE_SUPPORTED_EVENTS: ${{ inputs.excludeSupportedEvents }}
-        GITHUB_WORKSPACE: ${{ github.workspace }}
-        GITHUB_REPOSITORY: ${{ github.repository }}
-        GITHUB_REF_NAME: ${{ inputs.sourceRef }}
-      run: |
-        node ${{ github.action_path }}/.github/scripts/update-manifest.js
 
     - name: Get GitHub App token
       if: env.APP_ID != '' && env.APP_PRIVATE_KEY != ''

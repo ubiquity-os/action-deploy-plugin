@@ -29,6 +29,7 @@ Builds a Ubiquity plugin, generates `manifest.json` metadata from source TypeScr
   - build outputs under `dist/**`
 - The artifact branch tree is reduced to generated outputs only (`manifest.json` and `dist/**`).
 - Source branches no longer receive generated `dist/**` or generated `manifest.json` commits.
+- In CI publish runs, manifest generation executes before build so projects importing `manifest.json` can compile even when the file is not tracked on the source branch.
 
 ## Manifest Generation Contract
 
@@ -89,3 +90,4 @@ node .github/scripts/update-manifest.js /absolute/path/to/plugin-project
 ```
 
 This command reads source under `src/`, updates `manifest.json`, and formats it with Prettier.
+If your repository does not track `manifest.json`, run this command as a local prepare step before build/test commands.
