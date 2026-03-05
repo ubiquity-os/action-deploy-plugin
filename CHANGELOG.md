@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.3.0](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.2.0...v1.3.0) (2026-03-05)
+
+
+### Features
+
+* publish generated outputs to artifact branches ([507ada6](https://github.com/ubiquity-os/action-deploy-plugin/commit/507ada6b9a59620bd100b79ac09b186104e115de))
+* publish generated outputs to artifact branches (issue [#320](https://github.com/ubiquity-os/action-deploy-plugin/issues/320)) ([4fde24c](https://github.com/ubiquity-os/action-deploy-plugin/commit/4fde24c3d4ecd2e356dd977158c1b40b7862c95c))
+
+
+### Bug Fixes
+
+* generate manifest before build in publish flow ([6b9e65e](https://github.com/ubiquity-os/action-deploy-plugin/commit/6b9e65e04f6461235d38ae7d90575b55e8465c11))
+* keep artifact branch tree scoped to generated files ([9e89cff](https://github.com/ubiquity-os/action-deploy-plugin/commit/9e89cffa5d7ff10fa69e85e4860af8085b77a7c7))
+
 ## [1.2.0](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.1.4...v1.2.0) (2026-02-10)
 
 
