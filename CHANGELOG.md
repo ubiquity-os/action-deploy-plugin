@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.3.0...v1.3.1) (2026-03-05)
+
+
+### Bug Fixes
+
+* **manifest:** convert single-object command schemas ([#32](https://github.com/ubiquity-os/action-deploy-plugin/issues/32)) ([75c41e9](https://github.com/ubiquity-os/action-deploy-plugin/commit/75c41e96fb31efa010caaaf8b6c90c4b602631d6))
+
 ## [1.3.0](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.2.0...v1.3.0) (2026-03-05)
 
 
