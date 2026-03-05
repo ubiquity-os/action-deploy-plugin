@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.2](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.3.1...v1.3.2) (2026-03-05)
+
+
+### Bug Fixes
+
+* **action:** default sourceRef for delete events ([126c3d4](https://github.com/ubiquity-os/action-deploy-plugin/commit/126c3d4015c9be86532b25412a492b3041dc648e))
+* **action:** make sourceRef default delete-aware ([d2457d8](https://github.com/ubiquity-os/action-deploy-plugin/commit/d2457d8359d9520badafda4998d36eee6255b3c9))
+
 ## [1.3.1](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.3.0...v1.3.1) (2026-03-05)
 
 
