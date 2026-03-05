@@ -4,25 +4,26 @@ Builds a Ubiquity plugin, generates `manifest.json` metadata from source TypeScr
 
 ## Inputs
 
-| Input | Required | Default | Description |
-| --- | --- | --- | --- |
-| `action` | No | `publish` | `publish` writes generated files to an artifact branch; `delete` removes the paired artifact branch. |
-| `manifestPath` | No | `${{ github.workspace }}/manifest.json` | Path to the target manifest file. |
-| `schemaPath` | No | `${{ github.workspace }}/src/types/plugin-input.ts` | Source schema entrypoint used for build artifacts. |
-| `pluginEntry` | No | `${{ github.workspace }}/src/index.ts` | Plugin runtime entrypoint used during build. |
-| `commitMessage` | No | `chore: [skip ci] updated manifest.json and dist build` | Commit message for generated changes. |
-| `sourceRef` | No | `${{ github.event.workflow_run.head_branch &#124;&#124; github.ref_name }}` | Source branch used for `short_name` and artifact branch mapping. |
-| `artifactPrefix` | No | `dist/` | Prefix for artifact branch names (`dist/<sourceRef>`). |
-| `nodeVersion` | No | `24.11.0` | Node version used by the action. |
-| `treatAsEsm` | No | `false` | Replaces `__dirname` with `import.meta.dirname` in built output. |
-| `bundleSingleFile` | No | `false` | Enables single-file esbuild bundling. |
-| `sourcemap` | No | `false` | Generates source maps for build output. |
-| `skipBotEvents` | No | `true` | Sets `manifest.skipBotEvents` (`true`/`false`). |
-| `excludeSupportedEvents` | No | `""` | Comma-separated listener events to remove from generated `ubiquity:listeners`. |
+| Input                    | Required | Default                                                                                                                                    | Description                                                                                          |
+| ------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `action`                 | No       | `publish`                                                                                                                                  | `publish` writes generated files to an artifact branch; `delete` removes the paired artifact branch. |
+| `manifestPath`           | No       | `${{ github.workspace }}/manifest.json`                                                                                                    | Path to the target manifest file.                                                                    |
+| `schemaPath`             | No       | `${{ github.workspace }}/src/types/plugin-input.ts`                                                                                        | Source schema entrypoint used for build artifacts.                                                   |
+| `pluginEntry`            | No       | `${{ github.workspace }}/src/index.ts`                                                                                                     | Plugin runtime entrypoint used during build.                                                         |
+| `commitMessage`          | No       | `chore: [skip ci] updated manifest.json and dist build`                                                                                    | Commit message for generated changes.                                                                |
+| `sourceRef`              | No       | `${{ github.event_name == 'delete' && github.event.ref &#124;&#124; github.event.workflow_run.head_branch &#124;&#124; github.ref_name }}` | Source branch used for `short_name` and artifact branch mapping.                                     |
+| `artifactPrefix`         | No       | `dist/`                                                                                                                                    | Prefix for artifact branch names (`dist/<sourceRef>`).                                               |
+| `nodeVersion`            | No       | `24.11.0`                                                                                                                                  | Node version used by the action.                                                                     |
+| `treatAsEsm`             | No       | `false`                                                                                                                                    | Replaces `__dirname` with `import.meta.dirname` in built output.                                     |
+| `bundleSingleFile`       | No       | `false`                                                                                                                                    | Enables single-file esbuild bundling.                                                                |
+| `sourcemap`              | No       | `false`                                                                                                                                    | Generates source maps for build output.                                                              |
+| `skipBotEvents`          | No       | `true`                                                                                                                                     | Sets `manifest.skipBotEvents` (`true`/`false`).                                                      |
+| `excludeSupportedEvents` | No       | `""`                                                                                                                                       | Comma-separated listener events to remove from generated `ubiquity:listeners`.                       |
 
 ## Artifact Branch Model
 
 - Source branch `R` maps to artifact branch `dist/R`.
+- For `delete` events, `sourceRef` defaults to `github.event.ref`, so callers usually do not need to pass `sourceRef`.
 - If `sourceRef` already starts with `dist/`, it is used as-is (no `dist/dist/...`).
 - Generated files are committed to the artifact branch only:
   - `manifest.json` at branch root
@@ -49,15 +50,15 @@ The action derives metadata from **source TypeScript modules** by inspecting the
 
 ### Generated manifest fields
 
-| Field | Source |
-| --- | --- |
-| `name` | `package.json#name` |
-| `description` | `package.json#description` |
-| `short_name` | `${repository}@${ref}` |
-| `configuration` | runtime value referenced by `settingsSchema` |
-| `commands` | runtime schema inferred from `TCommand` (or omitted when `TCommand = null`) |
+| Field                | Source                                                                           |
+| -------------------- | -------------------------------------------------------------------------------- |
+| `name`               | `package.json#name`                                                              |
+| `description`        | `package.json#description`                                                       |
+| `short_name`         | `${repository}@${ref}`                                                           |
+| `configuration`      | runtime value referenced by `settingsSchema`                                     |
+| `commands`           | runtime schema inferred from `TCommand` (or omitted when `TCommand = null`)      |
 | `ubiquity:listeners` | string literals resolved from `TSupportedEvents`, minus `excludeSupportedEvents` |
-| `skipBotEvents` | action input `skipBotEvents` (default `true`) |
+| `skipBotEvents`      | action input `skipBotEvents` (default `true`)                                    |
 
 ### Strict failures (non-zero exit)
 
