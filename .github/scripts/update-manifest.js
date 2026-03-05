@@ -271,8 +271,8 @@ function validateCommands(commands) {
 }
 
 /**
- * Attempts to convert a TypeBox-style command schema union into
- * the manifest commands map format.
+ * Attempts to convert a TypeBox-style command schema (union or single variant)
+ * into the manifest commands map format.
  */
 function convertTypeBoxCommandSchema(commandSchema, existingCommands = {}) {
   if (
@@ -283,16 +283,22 @@ function convertTypeBoxCommandSchema(commandSchema, existingCommands = {}) {
     return { commands: null, error: "commandSchema must be an object" };
   }
 
-  const variants = Array.isArray(commandSchema.anyOf)
+  const unionVariants = Array.isArray(commandSchema.anyOf)
     ? commandSchema.anyOf
     : Array.isArray(commandSchema.oneOf)
       ? commandSchema.oneOf
       : null;
+  const looksLikeSingleVariant =
+    typeof commandSchema.properties === "object" &&
+    commandSchema.properties !== null &&
+    !Array.isArray(commandSchema.properties);
+  const variants = unionVariants || (looksLikeSingleVariant ? [commandSchema] : null);
 
   if (!variants || variants.length === 0) {
     return {
       commands: null,
-      error: "commandSchema is missing anyOf/oneOf command variants",
+      error:
+        "commandSchema is missing anyOf/oneOf command variants and does not look like a single command object schema",
     };
   }
 
@@ -500,25 +506,14 @@ function buildManifest(
     if (!validationError) {
       manifest["commands"] = commandSchema;
     } else {
-      const looksLikeTypeBoxUnion =
-        typeof commandSchema === "object" &&
-        commandSchema !== null &&
-        (Array.isArray(commandSchema.anyOf) || Array.isArray(commandSchema.oneOf));
-
-      if (!looksLikeTypeBoxUnion) {
-        warnings.push(
-          `manifest.commands: commandSchema export is invalid (${validationError}). Skipping.`,
-        );
+      const { commands: convertedCommands, error: conversionError } =
+        convertTypeBoxCommandSchema(commandSchema, manifest["commands"]);
+      if (convertedCommands) {
+        manifest["commands"] = convertedCommands;
       } else {
-        const { commands: convertedCommands, error: conversionError } =
-          convertTypeBoxCommandSchema(commandSchema, manifest["commands"]);
-        if (convertedCommands) {
-          manifest["commands"] = convertedCommands;
-        } else {
-          warnings.push(
-            `manifest.commands: commandSchema export found but could not be converted (${conversionError}). Skipping.`,
-          );
-        }
+        warnings.push(
+          `manifest.commands: commandSchema export is invalid (${validationError}). TypeBox conversion failed (${conversionError}). Skipping.`,
+        );
       }
     }
   } else if (!options.allowMissingCommandSchema) {
