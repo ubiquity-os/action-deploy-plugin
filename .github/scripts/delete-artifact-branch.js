@@ -13,6 +13,28 @@ function getRequiredEnv(name) {
   return value;
 }
 
+function isBranchNotFoundError(error) {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  if ("status" in error && Number(error.status) === 404) {
+    return true;
+  }
+
+  if (!("status" in error) || Number(error.status) !== 422) {
+    return false;
+  }
+
+  const response = "response" in error && error.response && typeof error.response === "object" ? error.response : null;
+  const data = response && "data" in response && response.data && typeof response.data === "object" ? response.data : null;
+  const message =
+    (data && "message" in data && typeof data.message === "string" ? data.message : "") ||
+    ("message" in error && typeof error.message === "string" ? error.message : "");
+
+  return /reference .*does not exist/i.test(message);
+}
+
 async function deleteArtifactBranch() {
   const githubToken = getRequiredEnv("GITHUB_TOKEN");
   const sourceRef = process.env.SOURCE_REF || process.env.GITHUB_REF_NAME;
@@ -41,8 +63,8 @@ async function deleteArtifactBranch() {
     });
     console.log(`Deleted artifact branch ${artifactRef}`);
   } catch (error) {
-    if (error && typeof error === "object" && "status" in error && Number(error.status) === 404) {
-      console.log(`Artifact branch ${artifactRef} does not exist; skipping delete.`);
+    if (isBranchNotFoundError(error)) {
+      console.log(`::warning::Branch '${artifactRef}' could not be deleted because it was not found.`);
       return;
     }
     throw error;
