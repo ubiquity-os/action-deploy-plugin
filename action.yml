@@ -24,7 +24,7 @@ inputs:
   sourceRef:
     description: "Source branch ref used for short_name and artifact branch mapping."
     required: false
-    default: "${{ github.event.workflow_run.head_branch || github.ref_name }}"
+    default: "${{ github.event_name == 'delete' && github.event.ref || github.event.workflow_run.head_branch || github.ref_name }}"
   artifactPrefix:
     description: "Prefix used for artifact branches."
     required: false
@@ -62,11 +62,39 @@ runs:
           exit 1
         fi
 
+    - name: Resolve source and artifact refs
+      id: resolve_refs
+      shell: bash
+      env:
+        SOURCE_REF_INPUT: ${{ inputs.sourceRef }}
+        ARTIFACT_PREFIX_INPUT: ${{ inputs.artifactPrefix }}
+      run: |
+        source_ref="$SOURCE_REF_INPUT"
+        source_ref="${source_ref#refs/heads/}"
+        source_ref="${source_ref#refs/tags/}"
+        if [ -z "$source_ref" ]; then
+          source_ref="${GITHUB_REF_NAME}"
+        fi
+
+        artifact_prefix="$ARTIFACT_PREFIX_INPUT"
+        if [ -z "$artifact_prefix" ]; then
+          artifact_prefix="dist/"
+        fi
+        artifact_prefix="${artifact_prefix#refs/heads/}"
+        if [[ "$artifact_prefix" != */ ]]; then
+          artifact_prefix="${artifact_prefix}/"
+        fi
+
+        echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
+        echo "artifact_prefix=$artifact_prefix" >> "$GITHUB_OUTPUT"
+        echo "SOURCE_REF=$source_ref" >> "$GITHUB_ENV"
+        echo "ARTIFACT_PREFIX=$artifact_prefix" >> "$GITHUB_ENV"
+
     - name: Check out the repository
       if: ${{ inputs.action == 'publish' }}
       uses: actions/checkout@v6
       with:
-        ref: ${{ inputs.sourceRef }}
+        ref: ${{ steps.resolve_refs.outputs.source_ref }}
 
     - name: Set up Node.js
       uses: actions/setup-node@v6
@@ -95,7 +123,7 @@ runs:
         EXCLUDE_SUPPORTED_EVENTS: ${{ inputs.excludeSupportedEvents }}
         GITHUB_WORKSPACE: ${{ github.workspace }}
         GITHUB_REPOSITORY: ${{ github.repository }}
-        GITHUB_REF_NAME: ${{ inputs.sourceRef }}
+        GITHUB_REF_NAME: ${{ steps.resolve_refs.outputs.source_ref }}
       run: |
         node ${{ github.action_path }}/.github/scripts/update-manifest.js
 
@@ -165,8 +193,8 @@ runs:
         GITHUB_WORKSPACE: ${{ github.workspace }}
         COMMIT_MESSAGE: ${{ inputs.commitMessage }}
         MANIFEST_PATH: ${{ inputs.manifestPath }}
-        SOURCE_REF: ${{ inputs.sourceRef }}
-        ARTIFACT_PREFIX: ${{ inputs.artifactPrefix }}
+        SOURCE_REF: ${{ steps.resolve_refs.outputs.source_ref }}
+        ARTIFACT_PREFIX: ${{ steps.resolve_refs.outputs.artifact_prefix }}
       run: |
         bun ${{ github.action_path }}/.github/scripts/push-changes.js
 
@@ -175,7 +203,7 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ steps.get_installation_token.outputs.token || github.token }}
-        SOURCE_REF: ${{ inputs.sourceRef }}
-        ARTIFACT_PREFIX: ${{ inputs.artifactPrefix }}
+        SOURCE_REF: ${{ steps.resolve_refs.outputs.source_ref }}
+        ARTIFACT_PREFIX: ${{ steps.resolve_refs.outputs.artifact_prefix }}
       run: |
         bun ${{ github.action_path }}/.github/scripts/delete-artifact-branch.js
