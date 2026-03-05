@@ -1,27 +1,35 @@
 const fs = require("fs");
 const path = require("path");
-const github = require("@actions/github");
-const glob = require("glob");
-
-const manifestPathInput = process.env.MANIFEST_PATH;
-const commitMessage = process.env.COMMIT_MESSAGE;
-const githubToken = process.env.GITHUB_TOKEN;
-const githubWorkspace = process.env.GITHUB_WORKSPACE;
-const githubRefName = process.env.GITHUB_REF_NAME;
 
 const MAX_FILE_SIZE = 30 * 1024 * 1024; // 30MB
 
-if (
-  !manifestPathInput ||
-  !commitMessage ||
-  !githubToken ||
-  !githubWorkspace ||
-  !githubRefName
-) {
-  console.error(
-    "Missing required environment variables (MANIFEST_PATH, COMMIT_MESSAGE, GITHUB_TOKEN, GITHUB_WORKSPACE, GITHUB_REF_NAME)",
-  );
-  process.exit(1);
+function normalizeBranchName(value) {
+  const branch = String(value || "")
+    .trim()
+    .replace(/^refs\/heads\//, "");
+  if (!branch) {
+    throw new Error("Branch name cannot be empty");
+  }
+  return branch;
+}
+
+function normalizeArtifactPrefix(value) {
+  const prefix = String(value || "dist/")
+    .trim()
+    .replace(/^refs\/heads\//, "");
+  if (!prefix) {
+    return "dist/";
+  }
+  return prefix.endsWith("/") ? prefix : `${prefix}/`;
+}
+
+function deriveArtifactRef(sourceRef, artifactPrefix) {
+  const normalizedSourceRef = normalizeBranchName(sourceRef);
+  const normalizedPrefix = normalizeArtifactPrefix(artifactPrefix);
+  if (normalizedSourceRef.startsWith(normalizedPrefix)) {
+    return normalizedSourceRef;
+  }
+  return `${normalizedPrefix}${normalizedSourceRef}`;
 }
 
 function splitContentIntoChunks(content, maxChunkSize) {
@@ -34,131 +42,204 @@ function splitContentIntoChunks(content, maxChunkSize) {
   return chunks;
 }
 
-async function pushChanges() {
-  const octokit = github.getOctokit(githubToken);
+function getRequiredEnv(name) {
+  const value = process.env[name];
+  if (!value || !String(value).trim()) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return value;
+}
 
-  const context = github.context;
-  const owner = context.repo.owner;
-  const repo = context.repo.repo;
-  const ref = `heads/${githubRefName}`;
-
+async function getRefSha(octokit, owner, repo, ref) {
   try {
-    console.log(`Getting current commit for ref: ${ref}`);
-    const currentCommit = await octokit.rest.git.getRef({
+    const result = await octokit.rest.git.getRef({
       owner,
       repo,
       ref,
     });
-    console.log(`Current commit SHA: ${currentCommit.data.object.sha}`);
-
-    const manifestFullPath = path.resolve(githubWorkspace, manifestPathInput);
-    const manifestRelativePath = path.relative(
-      githubWorkspace,
-      manifestFullPath,
-    );
-
-    let parentCommitSha = currentCommit.data.object.sha;
-    const treeEntries = [];
-
-    console.log("Processing manifest file:", manifestRelativePath);
-    treeEntries.push({
-      path: manifestRelativePath,
-      mode: "100644",
-      type: "blob",
-      content: fs.readFileSync(manifestFullPath, "utf8"),
-    });
-
-    const distPath = path.join(githubWorkspace, "dist/");
-    const distFiles = glob.sync(distPath + "**/*.{js,cjs,map,json}");
-    console.log(`Processing ${distFiles.length} dist files...`);
-
-    for (const file of distFiles) {
-      const relativePath = path.relative(githubWorkspace, file);
-      const fileStats = fs.statSync(file);
-      console.log(`Processing file: ${relativePath} (${fileStats.size} bytes)`);
-
-      if (fileStats.size > MAX_FILE_SIZE) {
-        console.log(
-          `Large file detected: ${relativePath}. Will split into chunked parts.`,
-        );
-        const fileContent = fs.readFileSync(file);
-        const chunks = splitContentIntoChunks(fileContent, MAX_FILE_SIZE);
-        for (let i = 0; i < chunks.length; i++) {
-          treeEntries.push({
-            path: `${relativePath}.part${i + 1}`,
-            mode: "100644",
-            type: "blob",
-            content: chunks[i].toString("base64"),
-            encoding: "base64",
-          });
-        }
-        console.log(
-          `Split ${relativePath} into ${chunks.length} files: ${relativePath}.part1 ... .part${chunks.length}`,
-        );
-      } else {
-        treeEntries.push({
-          path: relativePath,
-          mode: "100644",
-          type: "blob",
-          content: fs.readFileSync(file, "utf8"),
-        });
-      }
-    }
-
-    const blobs = [];
-    for (const entry of treeEntries) {
-      let blob;
-      if (entry.encoding === "base64") {
-        blob = await octokit.rest.git.createBlob({
-          owner,
-          repo,
-          content: entry.content,
-          encoding: "base64",
-        });
-      } else {
-        blob = await octokit.rest.git.createBlob({
-          owner,
-          repo,
-          content: entry.content,
-          encoding: "utf-8",
-        });
-      }
-      blobs.push({
-        path: entry.path,
-        mode: entry.mode,
-        type: entry.type,
-        sha: blob.data.sha,
-      });
-    }
-
-    const newTree = await octokit.rest.git.createTree({
-      owner,
-      repo,
-      base_tree: parentCommitSha,
-      tree: blobs,
-    });
-
-    const newCommit = await octokit.rest.git.createCommit({
-      owner,
-      repo,
-      message: commitMessage,
-      tree: newTree.data.sha,
-      parents: [parentCommitSha],
-    });
-
-    await octokit.rest.git.updateRef({
-      owner,
-      repo,
-      ref,
-      sha: newCommit.data.sha,
-      force: true,
-    });
-
-    console.log(`Commit ${newCommit.data.sha} pushed successfully!`);
+    return result.data.object.sha;
   } catch (error) {
-    console.error("Error pushing changes:", error);
-    process.exit(1);
+    if (error && typeof error === "object" && "status" in error && Number(error.status) === 404) {
+      return null;
+    }
+    throw error;
   }
 }
 
-pushChanges();
+async function resolveSourceSha(octokit, owner, repo, sourceRef, fallbackSha) {
+  const ref = `heads/${normalizeBranchName(sourceRef)}`;
+  const sourceSha = await getRefSha(octokit, owner, repo, ref);
+  if (sourceSha) {
+    return sourceSha;
+  }
+  if (fallbackSha) {
+    return fallbackSha;
+  }
+  throw new Error(`Could not resolve source branch SHA for ${ref}`);
+}
+
+function collectTreeEntries({ githubWorkspace, manifestPathInput }) {
+  const glob = require("glob");
+  const treeEntries = [];
+  const manifestFullPath = path.resolve(githubWorkspace, manifestPathInput);
+  if (!fs.existsSync(manifestFullPath)) {
+    throw new Error(`Manifest file does not exist at ${manifestFullPath}`);
+  }
+
+  treeEntries.push({
+    path: "manifest.json",
+    mode: "100644",
+    type: "blob",
+    content: fs.readFileSync(manifestFullPath, "utf8"),
+  });
+
+  const distFiles = glob.sync("dist/**/*.{js,cjs,map,json}", {
+    cwd: githubWorkspace,
+    absolute: true,
+    nodir: true,
+  });
+
+  for (const file of distFiles) {
+    const relativePath = path.relative(githubWorkspace, file).replaceAll("\\", "/");
+    const fileStats = fs.statSync(file);
+    if (fileStats.size > MAX_FILE_SIZE) {
+      const fileContent = fs.readFileSync(file);
+      const chunks = splitContentIntoChunks(fileContent, MAX_FILE_SIZE);
+      for (let i = 0; i < chunks.length; i++) {
+        treeEntries.push({
+          path: `${relativePath}.part${i + 1}`,
+          mode: "100644",
+          type: "blob",
+          content: chunks[i].toString("base64"),
+          encoding: "base64",
+        });
+      }
+    } else {
+      treeEntries.push({
+        path: relativePath,
+        mode: "100644",
+        type: "blob",
+        content: fs.readFileSync(file, "utf8"),
+      });
+    }
+  }
+
+  return treeEntries;
+}
+
+async function createTreeFromEntries(octokit, owner, repo, treeEntries) {
+  const blobs = [];
+  for (const entry of treeEntries) {
+    const blob = await octokit.rest.git.createBlob({
+      owner,
+      repo,
+      content: entry.content,
+      encoding: entry.encoding === "base64" ? "base64" : "utf-8",
+    });
+    blobs.push({
+      path: entry.path,
+      mode: entry.mode,
+      type: entry.type,
+      sha: blob.data.sha,
+    });
+  }
+
+  const tree = await octokit.rest.git.createTree({
+    owner,
+    repo,
+    tree: blobs,
+  });
+
+  return tree.data.sha;
+}
+
+async function pushChanges() {
+  const github = require("@actions/github");
+  const manifestPathInput = getRequiredEnv("MANIFEST_PATH");
+  const commitMessage = getRequiredEnv("COMMIT_MESSAGE");
+  const githubToken = getRequiredEnv("GITHUB_TOKEN");
+  const githubWorkspace = getRequiredEnv("GITHUB_WORKSPACE");
+  const sourceRef = process.env.SOURCE_REF || process.env.GITHUB_REF_NAME;
+  if (!sourceRef || !sourceRef.trim()) {
+    throw new Error("Missing SOURCE_REF or GITHUB_REF_NAME environment variable");
+  }
+  const artifactPrefix = process.env.ARTIFACT_PREFIX || "dist/";
+
+  const octokit = github.getOctokit(githubToken);
+  const context = github.context;
+  const owner = context.repo.owner;
+  const repo = context.repo.repo;
+
+  const normalizedSourceRef = normalizeBranchName(sourceRef);
+  const artifactRef = deriveArtifactRef(normalizedSourceRef, artifactPrefix);
+  const artifactHeadRef = `heads/${artifactRef}`;
+
+  console.log(`Source branch: ${normalizedSourceRef}`);
+  console.log(`Artifact branch: ${artifactRef}`);
+
+  const sourceSha = await resolveSourceSha(octokit, owner, repo, normalizedSourceRef, context.sha);
+  const artifactSha = await getRefSha(octokit, owner, repo, artifactHeadRef);
+  const parentCommitSha = artifactSha || sourceSha;
+
+  const parentCommit = await octokit.rest.git.getCommit({
+    owner,
+    repo,
+    commit_sha: parentCommitSha,
+  });
+
+  const treeEntries = collectTreeEntries({
+    githubWorkspace,
+    manifestPathInput,
+  });
+  const newTreeSha = await createTreeFromEntries(
+    octokit,
+    owner,
+    repo,
+    treeEntries
+  );
+
+  if (newTreeSha === parentCommit.data.tree.sha) {
+    console.log("No generated changes to publish on artifact branch.");
+    return;
+  }
+
+  const newCommit = await octokit.rest.git.createCommit({
+    owner,
+    repo,
+    message: commitMessage,
+    tree: newTreeSha,
+    parents: [parentCommitSha],
+  });
+
+  if (artifactSha) {
+    await octokit.rest.git.updateRef({
+      owner,
+      repo,
+      ref: artifactHeadRef,
+      sha: newCommit.data.sha,
+      force: false,
+    });
+  } else {
+    await octokit.rest.git.createRef({
+      owner,
+      repo,
+      ref: `refs/heads/${artifactRef}`,
+      sha: newCommit.data.sha,
+    });
+  }
+
+  console.log(`Published artifact commit ${newCommit.data.sha} to ${artifactRef}`);
+}
+
+module.exports = {
+  deriveArtifactRef,
+  normalizeArtifactPrefix,
+  normalizeBranchName,
+};
+
+if (require.main === module) {
+  pushChanges().catch((error) => {
+    console.error("Error pushing artifact changes:", error);
+    process.exit(1);
+  });
+}
