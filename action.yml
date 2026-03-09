@@ -68,6 +68,7 @@ runs:
       env:
         SOURCE_REF_INPUT: ${{ inputs.sourceRef }}
         ARTIFACT_PREFIX_INPUT: ${{ inputs.artifactPrefix }}
+        EVENT_REF_TYPE: ${{ github.event.ref_type || '' }}
       run: |
         source_ref="$SOURCE_REF_INPUT"
         source_ref="${source_ref#refs/heads/}"
@@ -85,37 +86,73 @@ runs:
           artifact_prefix="${artifact_prefix}/"
         fi
 
+        is_tag_ref="false"
+        if [[ "$EVENT_REF_TYPE" == "tag" ]] || [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+          is_tag_ref="true"
+        fi
+
+        is_artifact_ref="false"
+        if [[ "$source_ref" == "$artifact_prefix"* ]]; then
+          is_artifact_ref="true"
+        fi
+
+        should_skip="false"
+        skip_reason=""
+        if [[ "$is_tag_ref" == "true" ]]; then
+          should_skip="true"
+          skip_reason="tag refs are not supported"
+        elif [[ "$is_artifact_ref" == "true" ]]; then
+          should_skip="true"
+          skip_reason="artifact refs are ignored"
+        fi
+
         echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
         echo "artifact_prefix=$artifact_prefix" >> "$GITHUB_OUTPUT"
+        echo "is_tag_ref=$is_tag_ref" >> "$GITHUB_OUTPUT"
+        echo "is_artifact_ref=$is_artifact_ref" >> "$GITHUB_OUTPUT"
+        echo "should_skip=$should_skip" >> "$GITHUB_OUTPUT"
+        echo "skip_reason=$skip_reason" >> "$GITHUB_OUTPUT"
         echo "SOURCE_REF=$source_ref" >> "$GITHUB_ENV"
         echo "ARTIFACT_PREFIX=$artifact_prefix" >> "$GITHUB_ENV"
 
+    - name: Skip unsupported refs
+      if: ${{ steps.resolve_refs.outputs.should_skip == 'true' }}
+      shell: bash
+      env:
+        SOURCE_REF: ${{ steps.resolve_refs.outputs.source_ref }}
+        SKIP_REASON: ${{ steps.resolve_refs.outputs.skip_reason }}
+      run: |
+        echo "::notice::Skipping action for '${SOURCE_REF}' (${SKIP_REASON})."
+
     - name: Check out the repository
-      if: ${{ inputs.action == 'publish' }}
+      if: ${{ inputs.action == 'publish' && steps.resolve_refs.outputs.should_skip != 'true' }}
       uses: actions/checkout@v6
       with:
         ref: ${{ steps.resolve_refs.outputs.source_ref }}
 
     - name: Set up Node.js
+      if: ${{ steps.resolve_refs.outputs.should_skip != 'true' }}
       uses: actions/setup-node@v6
       with:
         node-version: ${{ inputs.nodeVersion }}
 
     - name: Set up Deno
+      if: ${{ steps.resolve_refs.outputs.should_skip != 'true' }}
       uses: denoland/setup-deno@v2
       with:
         deno-version: v2.x
 
     - uses: oven-sh/setup-bun@v2
+      if: ${{ steps.resolve_refs.outputs.should_skip != 'true' }}
 
     - name: Install dependencies
-      if: ${{ inputs.action == 'publish' }}
+      if: ${{ inputs.action == 'publish' && steps.resolve_refs.outputs.should_skip != 'true' }}
       shell: bash
       run: |
         bun install --frozen-lockfile
 
     - name: Prepare manifest configuration JSON
-      if: ${{ inputs.action == 'publish' }}
+      if: ${{ inputs.action == 'publish' && steps.resolve_refs.outputs.should_skip != 'true' }}
       shell: bash
       env:
         MANIFEST_PATH: ${{ inputs.manifestPath }}
@@ -128,7 +165,7 @@ runs:
         node ${{ github.action_path }}/.github/scripts/update-manifest.js
 
     - name: Build project
-      if: ${{ inputs.action == 'publish' }}
+      if: ${{ inputs.action == 'publish' && steps.resolve_refs.outputs.should_skip != 'true' }}
       shell: bash
       run: |
         echo "Deleting previous dist..."
@@ -147,7 +184,7 @@ runs:
         fi
 
     - name: Replace __dirname with import.meta.dirname
-      if: ${{ inputs.action == 'publish' && inputs.treatAsEsm }}
+      if: ${{ inputs.action == 'publish' && inputs.treatAsEsm && steps.resolve_refs.outputs.should_skip != 'true' }}
       shell: bash
       run: |
         if [ "${{ inputs.treatAsEsm }}" = "true" ]; then
@@ -155,7 +192,7 @@ runs:
         fi
 
     - name: Get GitHub App token
-      if: env.APP_ID != '' && env.APP_PRIVATE_KEY != ''
+      if: env.APP_ID != '' && env.APP_PRIVATE_KEY != '' && steps.resolve_refs.outputs.should_skip != 'true'
       uses: actions/create-github-app-token@v1
       id: get_installation_token
       with:
@@ -163,6 +200,7 @@ runs:
         private-key: ${{ env.APP_PRIVATE_KEY }}
 
     - name: Install push script dependencies
+      if: ${{ steps.resolve_refs.outputs.should_skip != 'true' }}
       shell: bash
       run: |
         echo "Installing dependencies for the push script in ${{ github.action_path }}"
@@ -170,7 +208,7 @@ runs:
         bun install
 
     - name: Inject reassembly code into dist/index.js
-      if: ${{ inputs.action == 'publish' }}
+      if: ${{ inputs.action == 'publish' && steps.resolve_refs.outputs.should_skip != 'true' }}
       shell: bash
       env:
         TREAT_AS_ESM: ${{ inputs.treatAsEsm }}
@@ -186,7 +224,7 @@ runs:
         fi
 
     - name: Publish manifest.json and dist to artifact branch
-      if: ${{ inputs.action == 'publish' }}
+      if: ${{ inputs.action == 'publish' && steps.resolve_refs.outputs.should_skip != 'true' }}
       shell: bash
       env:
         GITHUB_TOKEN: ${{ steps.get_installation_token.outputs.token || github.token }}
@@ -199,7 +237,7 @@ runs:
         bun ${{ github.action_path }}/.github/scripts/push-changes.js
 
     - name: Delete artifact branch
-      if: ${{ inputs.action == 'delete' }}
+      if: ${{ inputs.action == 'delete' && steps.resolve_refs.outputs.should_skip != 'true' }}
       shell: bash
       env:
         GITHUB_TOKEN: ${{ steps.get_installation_token.outputs.token || github.token }}
