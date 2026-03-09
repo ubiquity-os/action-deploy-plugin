@@ -148,6 +148,9 @@ runs:
     - name: Install dependencies
       if: ${{ inputs.action == 'publish' && steps.resolve_refs.outputs.should_skip != 'true' }}
       shell: bash
+      env:
+        SKIP_BOT_EVENTS: ${{ inputs.skipBotEvents }}
+        GITHUB_REF_NAME: ${{ steps.resolve_refs.outputs.source_ref }}
       run: |
         bun install --frozen-lockfile
 
@@ -167,6 +170,9 @@ runs:
     - name: Build project
       if: ${{ inputs.action == 'publish' && steps.resolve_refs.outputs.should_skip != 'true' }}
       shell: bash
+      env:
+        SKIP_BOT_EVENTS: ${{ inputs.skipBotEvents }}
+        GITHUB_REF_NAME: ${{ steps.resolve_refs.outputs.source_ref }}
       run: |
         echo "Deleting previous dist..."
         rm -rf "${{ github.workspace }}/dist"
