@@ -145,13 +145,6 @@ runs:
     - uses: oven-sh/setup-bun@v2
       if: ${{ steps.resolve_refs.outputs.should_skip != 'true' }}
 
-    - name: Export manifest env for lifecycle scripts
-      if: ${{ inputs.action == 'publish' && steps.resolve_refs.outputs.should_skip != 'true' }}
-      shell: bash
-      run: |
-        echo "SKIP_BOT_EVENTS=${{ inputs.skipBotEvents }}" >> "$GITHUB_ENV"
-        echo "GITHUB_REF_NAME=${{ steps.resolve_refs.outputs.source_ref }}" >> "$GITHUB_ENV"
-
     - name: Install dependencies
       if: ${{ inputs.action == 'publish' && steps.resolve_refs.outputs.should_skip != 'true' }}
       shell: bash
@@ -197,6 +190,19 @@ runs:
         if [ "${{ inputs.treatAsEsm }}" = "true" ]; then
           sed -i 's/__dirname/import.meta.dirname/g' "${{ github.workspace }}/dist/plugin/index.js"
         fi
+
+    - name: Finalize manifest configuration JSON
+      if: ${{ inputs.action == 'publish' && steps.resolve_refs.outputs.should_skip != 'true' }}
+      shell: bash
+      env:
+        MANIFEST_PATH: ${{ inputs.manifestPath }}
+        SKIP_BOT_EVENTS: ${{ inputs.skipBotEvents }}
+        EXCLUDE_SUPPORTED_EVENTS: ${{ inputs.excludeSupportedEvents }}
+        GITHUB_WORKSPACE: ${{ github.workspace }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_REF_NAME: ${{ steps.resolve_refs.outputs.source_ref }}
+      run: |
+        node ${{ github.action_path }}/.github/scripts/update-manifest.js
 
     - name: Get GitHub App token
       if: env.APP_ID != '' && env.APP_PRIVATE_KEY != '' && steps.resolve_refs.outputs.should_skip != 'true'
