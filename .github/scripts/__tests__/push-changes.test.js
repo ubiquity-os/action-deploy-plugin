@@ -1,7 +1,11 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 
 const {
+  collectTreeEntries,
   deriveArtifactRef,
   normalizeArtifactPrefix,
   normalizeBranchName,
@@ -26,5 +30,50 @@ describe("artifact branch helpers", () => {
 
   it("does not double-prefix dist branches", () => {
     assert.equal(deriveArtifactRef("dist/feat/example", "dist/"), "dist/feat/example");
+  });
+});
+
+describe("collectTreeEntries", () => {
+  function createWorkspace(withActionYaml) {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "push-changes-"));
+    fs.mkdirSync(path.join(workspace, "dist"), { recursive: true });
+    fs.writeFileSync(path.join(workspace, "manifest.json"), '{"name":"fixture"}\n');
+    fs.writeFileSync(path.join(workspace, "dist", "index.js"), "console.log('artifact');\n");
+    if (withActionYaml) {
+      fs.writeFileSync(path.join(workspace, "action.yml"), "name: fixture-action\n");
+    }
+    return workspace;
+  }
+
+  it("includes action.yml when present at repository root", () => {
+    const workspace = createWorkspace(true);
+    try {
+      const entries = collectTreeEntries({
+        githubWorkspace: workspace,
+        manifestPathInput: "manifest.json",
+      });
+      const entryPaths = entries.map((entry) => entry.path);
+      assert.ok(entryPaths.includes("manifest.json"));
+      assert.ok(entryPaths.includes("dist/index.js"));
+      assert.ok(entryPaths.includes("action.yml"));
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("does not include action.yml when absent", () => {
+    const workspace = createWorkspace(false);
+    try {
+      const entries = collectTreeEntries({
+        githubWorkspace: workspace,
+        manifestPathInput: "manifest.json",
+      });
+      const entryPaths = entries.map((entry) => entry.path);
+      assert.ok(entryPaths.includes("manifest.json"));
+      assert.ok(entryPaths.includes("dist/index.js"));
+      assert.ok(!entryPaths.includes("action.yml"));
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
   });
 });
