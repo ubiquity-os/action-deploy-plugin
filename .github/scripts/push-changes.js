@@ -93,6 +93,16 @@ function collectTreeEntries({ githubWorkspace, manifestPathInput }) {
     content: fs.readFileSync(manifestFullPath, "utf8"),
   });
 
+  const actionPath = path.resolve(githubWorkspace, "action.yml");
+  if (fs.existsSync(actionPath)) {
+    treeEntries.push({
+      path: "action.yml",
+      mode: "100644",
+      type: "blob",
+      content: fs.readFileSync(actionPath, "utf8"),
+    });
+  }
+
   const distFiles = glob.sync("dist/**/*.{js,cjs,map,json}", {
     cwd: githubWorkspace,
     absolute: true,
@@ -232,6 +242,7 @@ async function pushChanges() {
 }
 
 module.exports = {
+  collectTreeEntries,
   deriveArtifactRef,
   normalizeArtifactPrefix,
   normalizeBranchName,
