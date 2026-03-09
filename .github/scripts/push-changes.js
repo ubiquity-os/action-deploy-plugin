@@ -2,6 +2,15 @@ const fs = require("fs");
 const path = require("path");
 
 const MAX_FILE_SIZE = 30 * 1024 * 1024; // 30MB
+const OPTIONAL_ROOT_ARTIFACT_FILES = [
+  "package.json",
+  "bun.lock",
+  "bun.lockb",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "npm-shrinkwrap.json",
+];
 
 function normalizeBranchName(value) {
   const branch = String(value || "")
@@ -59,7 +68,12 @@ async function getRefSha(octokit, owner, repo, ref) {
     });
     return result.data.object.sha;
   } catch (error) {
-    if (error && typeof error === "object" && "status" in error && Number(error.status) === 404) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "status" in error &&
+      Number(error.status) === 404
+    ) {
       return null;
     }
     throw error;
@@ -103,13 +117,43 @@ function collectTreeEntries({ githubWorkspace, manifestPathInput }) {
     });
   }
 
-  const workflowComputePath = path.resolve(githubWorkspace, ".github", "workflows", "compute.yml");
+  const workflowComputePath = path.resolve(
+    githubWorkspace,
+    ".github",
+    "workflows",
+    "compute.yml",
+  );
   if (fs.existsSync(workflowComputePath)) {
     treeEntries.push({
       path: ".github/workflows/compute.yml",
       mode: "100644",
       type: "blob",
       content: fs.readFileSync(workflowComputePath, "utf8"),
+    });
+  }
+
+  for (const optionalPath of OPTIONAL_ROOT_ARTIFACT_FILES) {
+    const fullPath = path.resolve(githubWorkspace, optionalPath);
+    if (!fs.existsSync(fullPath)) {
+      continue;
+    }
+
+    if (optionalPath === "bun.lockb") {
+      treeEntries.push({
+        path: optionalPath,
+        mode: "100644",
+        type: "blob",
+        content: fs.readFileSync(fullPath).toString("base64"),
+        encoding: "base64",
+      });
+      continue;
+    }
+
+    treeEntries.push({
+      path: optionalPath,
+      mode: "100644",
+      type: "blob",
+      content: fs.readFileSync(fullPath, "utf8"),
     });
   }
 
@@ -120,7 +164,9 @@ function collectTreeEntries({ githubWorkspace, manifestPathInput }) {
   });
 
   for (const file of distFiles) {
-    const relativePath = path.relative(githubWorkspace, file).replaceAll("\\", "/");
+    const relativePath = path
+      .relative(githubWorkspace, file)
+      .replaceAll("\\", "/");
     const fileStats = fs.statSync(file);
     if (fileStats.size > MAX_FILE_SIZE) {
       const fileContent = fs.readFileSync(file);
@@ -181,7 +227,9 @@ async function pushChanges() {
   const githubWorkspace = getRequiredEnv("GITHUB_WORKSPACE");
   const sourceRef = process.env.SOURCE_REF || process.env.GITHUB_REF_NAME;
   if (!sourceRef || !sourceRef.trim()) {
-    throw new Error("Missing SOURCE_REF or GITHUB_REF_NAME environment variable");
+    throw new Error(
+      "Missing SOURCE_REF or GITHUB_REF_NAME environment variable",
+    );
   }
   const artifactPrefix = process.env.ARTIFACT_PREFIX || "dist/";
 
@@ -197,7 +245,13 @@ async function pushChanges() {
   console.log(`Source branch: ${normalizedSourceRef}`);
   console.log(`Artifact branch: ${artifactRef}`);
 
-  const sourceSha = await resolveSourceSha(octokit, owner, repo, normalizedSourceRef, context.sha);
+  const sourceSha = await resolveSourceSha(
+    octokit,
+    owner,
+    repo,
+    normalizedSourceRef,
+    context.sha,
+  );
   const artifactSha = await getRefSha(octokit, owner, repo, artifactHeadRef);
   const parentCommitSha = artifactSha || sourceSha;
 
@@ -211,26 +265,51 @@ async function pushChanges() {
     githubWorkspace,
     manifestPathInput,
   });
-  const includesActionYml = treeEntries.some((entry) => entry.path === "action.yml");
-  const includesComputeWorkflow = treeEntries.some((entry) => entry.path === ".github/workflows/compute.yml");
-  const distEntryCount = treeEntries.filter((entry) => entry.path.startsWith("dist/")).length;
+  const includesActionYml = treeEntries.some(
+    (entry) => entry.path === "action.yml",
+  );
+  const includesComputeWorkflow = treeEntries.some(
+    (entry) => entry.path === ".github/workflows/compute.yml",
+  );
+  const includesPackageJson = treeEntries.some(
+    (entry) => entry.path === "package.json",
+  );
+  const includedLockfiles = OPTIONAL_ROOT_ARTIFACT_FILES.filter(
+    (file) =>
+      file !== "package.json" &&
+      treeEntries.some((entry) => entry.path === file),
+  );
+  const distEntryCount = treeEntries.filter((entry) =>
+    entry.path.startsWith("dist/"),
+  ).length;
   console.log(
     `Artifact payload entries: manifest.json + ${distEntryCount} dist file(s)${
       includesActionYml ? " + action.yml" : ""
-    }${includesComputeWorkflow ? " + .github/workflows/compute.yml" : ""}`
+    }${includesComputeWorkflow ? " + .github/workflows/compute.yml" : ""}${includesPackageJson ? " + package.json" : ""}${
+      includedLockfiles.length ? ` + ${includedLockfiles.join(", ")}` : ""
+    }`,
   );
   if (!includesActionYml) {
-    console.log("Root action.yml not found in workspace; skipping action metadata in artifact payload.");
+    console.log(
+      "Root action.yml not found in workspace; skipping action metadata in artifact payload.",
+    );
   }
   if (!includesComputeWorkflow) {
-    console.log("Workflow .github/workflows/compute.yml not found in workspace; skipping workflow metadata in artifact payload.");
+    console.log(
+      "Workflow .github/workflows/compute.yml not found in workspace; skipping workflow metadata in artifact payload.",
+    );
+  }
+  if (!includesPackageJson) {
+    console.log(
+      "Root package.json not found in workspace; skipping package metadata in artifact payload.",
+    );
   }
 
   const newTreeSha = await createTreeFromEntries(
     octokit,
     owner,
     repo,
-    treeEntries
+    treeEntries,
   );
 
   if (newTreeSha === parentCommit.data.tree.sha) {
@@ -263,7 +342,9 @@ async function pushChanges() {
     });
   }
 
-  console.log(`Published artifact commit ${newCommit.data.sha} to ${artifactRef}`);
+  console.log(
+    `Published artifact commit ${newCommit.data.sha} to ${artifactRef}`,
+  );
 }
 
 module.exports = {
