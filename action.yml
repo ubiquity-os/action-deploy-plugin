@@ -149,7 +149,8 @@ runs:
       if: ${{ inputs.action == 'publish' && steps.resolve_refs.outputs.should_skip != 'true' }}
       shell: bash
       run: |
-        bun install --frozen-lockfile
+        # Prevent plugin lifecycle scripts (e.g. prepare:manifest) from mutating manifest.json.
+        bun install --frozen-lockfile --ignore-scripts
 
     - name: Prepare manifest configuration JSON
       if: ${{ inputs.action == 'publish' && steps.resolve_refs.outputs.should_skip != 'true' }}
@@ -162,6 +163,7 @@ runs:
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_REF_NAME: ${{ steps.resolve_refs.outputs.source_ref }}
       run: |
+        echo "Resolved SKIP_BOT_EVENTS=${SKIP_BOT_EVENTS}"
         node ${{ github.action_path }}/.github/scripts/update-manifest.js
 
     - name: Build project
@@ -176,11 +178,10 @@ runs:
           echo "Compiling plugin types (single file)..."
           bun x esbuild ${{ inputs.schemaPath }} --bundle --platform=node --format=esm --target=node20 --minify --outfile=plugin/index.js
         else
-          bun add -DE @vercel/ncc
           echo "Compiling plugin..."
-          bun ncc build ${{ inputs.pluginEntry }} --external "./tests" -m ${{ inputs.sourcemap == 'true' && '-s' || '' }} -o dist/plugin
+          bun x @vercel/ncc build ${{ inputs.pluginEntry }} --external "./tests" -m ${{ inputs.sourcemap == 'true' && '-s' || '' }} -o dist/plugin
           echo "Compiling plugin types..."
-          bun ncc build ${{ inputs.schemaPath }} --external "./tests" -m -o plugin
+          bun x @vercel/ncc build ${{ inputs.schemaPath }} --external "./tests" -m -o plugin
         fi
 
     - name: Replace __dirname with import.meta.dirname

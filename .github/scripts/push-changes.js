@@ -201,6 +201,15 @@ async function pushChanges() {
     githubWorkspace,
     manifestPathInput,
   });
+  const includesActionYml = treeEntries.some((entry) => entry.path === "action.yml");
+  const distEntryCount = treeEntries.filter((entry) => entry.path.startsWith("dist/")).length;
+  console.log(
+    `Artifact payload entries: manifest.json + ${distEntryCount} dist file(s)${includesActionYml ? " + action.yml" : ""}`
+  );
+  if (!includesActionYml) {
+    console.log("Root action.yml not found in workspace; skipping action metadata in artifact payload.");
+  }
+
   const newTreeSha = await createTreeFromEntries(
     octokit,
     owner,
