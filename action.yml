@@ -149,8 +149,8 @@ runs:
       if: ${{ inputs.action == 'publish' && steps.resolve_refs.outputs.should_skip != 'true' }}
       shell: bash
       run: |
-        # Prevent plugin lifecycle scripts (e.g. prepare:manifest) from mutating manifest.json.
-        bun install --frozen-lockfile --ignore-scripts
+        # Keep project install-time generators (if any) available for builds.
+        bun install --frozen-lockfile
 
     - name: Prepare manifest configuration JSON
       if: ${{ inputs.action == 'publish' && steps.resolve_refs.outputs.should_skip != 'true' }}
@@ -235,6 +235,14 @@ runs:
         SOURCE_REF: ${{ steps.resolve_refs.outputs.source_ref }}
         ARTIFACT_PREFIX: ${{ steps.resolve_refs.outputs.artifact_prefix }}
       run: |
+        # Enforce final manifest values after all build-time lifecycle scripts.
+        echo "Re-applying manifest before publish with SKIP_BOT_EVENTS=${{ inputs.skipBotEvents }}"
+        SKIP_BOT_EVENTS="${{ inputs.skipBotEvents }}" \
+        EXCLUDE_SUPPORTED_EVENTS="${{ inputs.excludeSupportedEvents }}" \
+        GITHUB_WORKSPACE="${{ github.workspace }}" \
+        GITHUB_REPOSITORY="${{ github.repository }}" \
+        GITHUB_REF_NAME="${{ steps.resolve_refs.outputs.source_ref }}" \
+        node ${{ github.action_path }}/.github/scripts/update-manifest.js
         bun ${{ github.action_path }}/.github/scripts/push-changes.js
 
     - name: Delete artifact branch
