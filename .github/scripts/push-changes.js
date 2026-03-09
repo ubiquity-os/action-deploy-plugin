@@ -103,6 +103,16 @@ function collectTreeEntries({ githubWorkspace, manifestPathInput }) {
     });
   }
 
+  const workflowComputePath = path.resolve(githubWorkspace, ".github", "workflows", "compute.yml");
+  if (fs.existsSync(workflowComputePath)) {
+    treeEntries.push({
+      path: ".github/workflows/compute.yml",
+      mode: "100644",
+      type: "blob",
+      content: fs.readFileSync(workflowComputePath, "utf8"),
+    });
+  }
+
   const distFiles = glob.sync("dist/**/*.{js,cjs,map,json}", {
     cwd: githubWorkspace,
     absolute: true,
@@ -202,12 +212,18 @@ async function pushChanges() {
     manifestPathInput,
   });
   const includesActionYml = treeEntries.some((entry) => entry.path === "action.yml");
+  const includesComputeWorkflow = treeEntries.some((entry) => entry.path === ".github/workflows/compute.yml");
   const distEntryCount = treeEntries.filter((entry) => entry.path.startsWith("dist/")).length;
   console.log(
-    `Artifact payload entries: manifest.json + ${distEntryCount} dist file(s)${includesActionYml ? " + action.yml" : ""}`
+    `Artifact payload entries: manifest.json + ${distEntryCount} dist file(s)${
+      includesActionYml ? " + action.yml" : ""
+    }${includesComputeWorkflow ? " + .github/workflows/compute.yml" : ""}`
   );
   if (!includesActionYml) {
     console.log("Root action.yml not found in workspace; skipping action metadata in artifact payload.");
+  }
+  if (!includesComputeWorkflow) {
+    console.log("Workflow .github/workflows/compute.yml not found in workspace; skipping workflow metadata in artifact payload.");
   }
 
   const newTreeSha = await createTreeFromEntries(

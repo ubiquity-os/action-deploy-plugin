@@ -34,7 +34,7 @@ describe("artifact branch helpers", () => {
 });
 
 describe("collectTreeEntries", () => {
-  function createWorkspace(withActionYaml) {
+  function createWorkspace({ withActionYaml = false, withComputeWorkflow = false } = {}) {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "push-changes-"));
     fs.mkdirSync(path.join(workspace, "dist"), { recursive: true });
     fs.writeFileSync(path.join(workspace, "manifest.json"), '{"name":"fixture"}\n');
@@ -42,11 +42,15 @@ describe("collectTreeEntries", () => {
     if (withActionYaml) {
       fs.writeFileSync(path.join(workspace, "action.yml"), "name: fixture-action\n");
     }
+    if (withComputeWorkflow) {
+      fs.mkdirSync(path.join(workspace, ".github", "workflows"), { recursive: true });
+      fs.writeFileSync(path.join(workspace, ".github", "workflows", "compute.yml"), "name: Compute\n");
+    }
     return workspace;
   }
 
   it("includes action.yml when present at repository root", () => {
-    const workspace = createWorkspace(true);
+    const workspace = createWorkspace({ withActionYaml: true });
     try {
       const entries = collectTreeEntries({
         githubWorkspace: workspace,
@@ -62,7 +66,7 @@ describe("collectTreeEntries", () => {
   });
 
   it("does not include action.yml when absent", () => {
-    const workspace = createWorkspace(false);
+    const workspace = createWorkspace();
     try {
       const entries = collectTreeEntries({
         githubWorkspace: workspace,
@@ -72,6 +76,23 @@ describe("collectTreeEntries", () => {
       assert.ok(entryPaths.includes("manifest.json"));
       assert.ok(entryPaths.includes("dist/index.js"));
       assert.ok(!entryPaths.includes("action.yml"));
+      assert.ok(!entryPaths.includes(".github/workflows/compute.yml"));
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("includes .github/workflows/compute.yml when present", () => {
+    const workspace = createWorkspace({ withComputeWorkflow: true });
+    try {
+      const entries = collectTreeEntries({
+        githubWorkspace: workspace,
+        manifestPathInput: "manifest.json",
+      });
+      const entryPaths = entries.map((entry) => entry.path);
+      assert.ok(entryPaths.includes("manifest.json"));
+      assert.ok(entryPaths.includes("dist/index.js"));
+      assert.ok(entryPaths.includes(".github/workflows/compute.yml"));
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }
