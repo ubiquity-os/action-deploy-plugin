@@ -174,9 +174,89 @@ describe("buildManifest", () => {
       "issue_comment.created",
       "pull_request.opened",
     ]);
-    assert.deepEqual(Object.keys(manifest.configuration.properties), ["greeting"]);
+    assert.deepEqual(Object.keys(manifest.configuration.properties), [
+      "greeting",
+    ]);
     assert.equal(manifest.configuration.required, undefined);
     assert.equal(warnings.length, 0);
+  });
+
+  it("accepts canonical dotless listeners", () => {
+    const pluginModule = {
+      pluginSettingsSchema: {
+        type: "object",
+        properties: {
+          greeting: { type: "string", default: "hello" },
+        },
+      },
+      commandSchema: {
+        ping: {
+          description: "Ping command",
+          "ubiquity:example": "/ping",
+        },
+      },
+    };
+
+    const { manifest, warnings } = buildManifest(
+      {},
+      pluginModule,
+      { name: "test-plugin", description: "Test plugin" },
+      REPO_INFO,
+      {
+        supportedEvents: ["push"],
+        knownWebhookEvents: new Set(["push", "issue_comment.created"]),
+      },
+    );
+
+    assert.deepEqual(manifest["ubiquity:listeners"], ["push"]);
+    assert.ok(
+      !warnings.some((warning) =>
+        warning.includes('manifest["ubiquity:listeners"]'),
+      ),
+    );
+  });
+
+  it("warns but preserves unknown listeners when canonical list is available", () => {
+    const pluginModule = {
+      pluginSettingsSchema: {
+        type: "object",
+        properties: {
+          greeting: { type: "string", default: "hello" },
+        },
+      },
+      commandSchema: {
+        ping: {
+          description: "Ping command",
+          "ubiquity:example": "/ping",
+        },
+      },
+    };
+
+    const { manifest, warnings } = buildManifest(
+      {},
+      pluginModule,
+      { name: "test-plugin", description: "Test plugin" },
+      REPO_INFO,
+      {
+        supportedEvents: ["push", "future_event.created"],
+        knownWebhookEvents: new Set(["push"]),
+      },
+    );
+
+    assert.deepEqual(manifest["ubiquity:listeners"], [
+      "push",
+      "future_event.created",
+    ]);
+    assert.ok(
+      warnings.some((warning) =>
+        warning.includes("unknown webhook event(s): future_event.created"),
+      ),
+    );
+    assert.ok(
+      !warnings.some((warning) =>
+        warning.includes("supported events found but invalid"),
+      ),
+    );
   });
 
   it("suppresses missing-command warning when TCommand is null", () => {
@@ -198,19 +278,16 @@ describe("buildManifest", () => {
   });
 
   it("warns and defaults skipBotEvents to true for invalid values", () => {
-    const { manifest, warnings } = buildManifest(
-      {},
-      {},
-      null,
-      REPO_INFO,
-      { skipBotEvents: "invalid" },
-    );
+    const { manifest, warnings } = buildManifest({}, {}, null, REPO_INFO, {
+      skipBotEvents: "invalid",
+    });
 
     assert.equal(manifest.skipBotEvents, true);
     assert.ok(
-      warnings.some((warning) =>
-        warning.includes("manifest.skipBotEvents") &&
-        warning.includes("invalid action input value"),
+      warnings.some(
+        (warning) =>
+          warning.includes("manifest.skipBotEvents") &&
+          warning.includes("invalid action input value"),
       ),
     );
   });
@@ -273,8 +350,13 @@ describe("buildManifest", () => {
     );
 
     assert.equal(manifest.commands.query.description, "Query user");
-    assert.equal(manifest.commands.query["ubiquity:example"], "/query @UbiquityOS");
-    assert.ok(!warnings.some((warning) => warning.includes("manifest.commands")));
+    assert.equal(
+      manifest.commands.query["ubiquity:example"],
+      "/query @UbiquityOS",
+    );
+    assert.ok(
+      !warnings.some((warning) => warning.includes("manifest.commands")),
+    );
   });
 });
 
@@ -338,10 +420,24 @@ describe("validation helpers", () => {
     });
   });
 
-  it("validateListeners validates webhook event format", () => {
-    assert.equal(validateListeners(["issue_comment.created"]), null);
-    assert.ok(validateListeners("issue_comment.created").includes("array"));
-    assert.ok(validateListeners(["push"]).includes("event.action"));
+  it("validateListeners validates listener values and canonical unknowns", () => {
+    assert.deepEqual(validateListeners(["issue_comment.created"]), {
+      error: null,
+      unknownEvents: [],
+    });
+    assert.ok(
+      validateListeners("issue_comment.created").error.includes("array"),
+    );
+    assert.ok(validateListeners([""]).error.includes("non-empty string"));
+    assert.deepEqual(
+      validateListeners(["push", "future_event.created"], {
+        knownWebhookEvents: new Set(["push"]),
+      }),
+      {
+        error: null,
+        unknownEvents: ["future_event.created"],
+      },
+    );
   });
 
   it("normalizes skipBotEvents values", () => {
@@ -368,9 +464,15 @@ describe("validation helpers", () => {
 
 describe("source parsing helpers", () => {
   it("handles delimiter matching and top-level splitting", () => {
-    const expression = "createPlugin<A, B, C, D>({}, {}, { settingsSchema: schema })";
+    const expression =
+      "createPlugin<A, B, C, D>({}, {}, { settingsSchema: schema })";
     const genericStart = expression.indexOf("<");
-    const genericEnd = findMatchingDelimiter(expression, genericStart, "<", ">");
+    const genericEnd = findMatchingDelimiter(
+      expression,
+      genericStart,
+      "<",
+      ">",
+    );
 
     assert.equal(expression.slice(genericEnd, genericEnd + 1), ">");
     assert.deepEqual(
@@ -386,7 +488,10 @@ describe("source parsing helpers", () => {
       "({ settingsSchema: pluginSettingsSchema, commandSchema, ...rest })",
     );
 
-    assert.equal(parsed.properties.get("settingsSchema"), "pluginSettingsSchema");
+    assert.equal(
+      parsed.properties.get("settingsSchema"),
+      "pluginSettingsSchema",
+    );
     assert.equal(parsed.properties.get("commandSchema"), "commandSchema");
     assert.deepEqual(parsed.spreads, ["rest"]);
   });
@@ -447,7 +552,7 @@ type Mode = "on" | "off";
     const target = writeProjectFile(
       projectRoot,
       "src/types/context.ts",
-      "export type SupportedEvents = \"issues.opened\";",
+      'export type SupportedEvents = "issues.opened";',
     );
 
     assert.equal(resolveTsModulePath(fromFile, "./types/context"), target);
@@ -459,7 +564,11 @@ createPlugin<A, B, C, D>({}, {}, { settingsSchema: schema });
 createPlugin({}, {}, { settingsSchema: schema });
 `;
 
-    const callsites = findCallsitesInSource("worker.ts", source, "createPlugin");
+    const callsites = findCallsitesInSource(
+      "worker.ts",
+      source,
+      "createPlugin",
+    );
     assert.equal(callsites.length, 1);
     assert.deepEqual(callsites[0].genericArgs, ["A", "B", "C", "D"]);
   });
@@ -894,11 +1003,15 @@ describe("misc utility behavior", () => {
     assert.deepEqual(
       pickManifestExports({
         pluginSettingsSchema: { type: "object" },
-        commandSchema: { ping: { description: "Ping", "ubiquity:example": "/ping" } },
+        commandSchema: {
+          ping: { description: "Ping", "ubiquity:example": "/ping" },
+        },
       }),
       {
         pluginSettingsSchema: { type: "object" },
-        commandSchema: { ping: { description: "Ping", "ubiquity:example": "/ping" } },
+        commandSchema: {
+          ping: { description: "Ping", "ubiquity:example": "/ping" },
+        },
       },
     );
 

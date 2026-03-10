@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@actions/github": "^6.0.0",
+    "@octokit/webhooks": "^14.2.0",
     "glob": "^10.0.0"
   },
   "devDependencies": {

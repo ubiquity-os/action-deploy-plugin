@@ -10,6 +10,7 @@ const execFileAsync = promisify(execFile);
 const MANIFEST_EXPORT_KEYS = ["pluginSettingsSchema", "commandSchema"];
 const DENO_OUTPUT_PREFIX = "__CODEX_MANIFEST_EXPORTS__";
 const ENTRYPOINT_FNS = ["createPlugin", "createActionsPlugin"];
+let canonicalWebhookEventsPromise = null;
 
 /**
  * Recursively lists files under a directory.
@@ -60,6 +61,50 @@ function warning(message) {
 }
 
 /**
+ * Loads canonical webhook event names from @octokit/webhooks.
+ * Falls back to null when the dependency is unavailable.
+ *
+ * @returns {Promise<Set<string>|null>}
+ */
+async function loadCanonicalWebhookEvents() {
+  if (canonicalWebhookEventsPromise) {
+    return canonicalWebhookEventsPromise;
+  }
+
+  canonicalWebhookEventsPromise = (async () => {
+    try {
+      const octokitWebhooks = await import("@octokit/webhooks");
+      const events = octokitWebhooks?.emitterEventNames;
+      if (!Array.isArray(events)) {
+        warning(
+          'manifest["ubiquity:listeners"]: @octokit/webhooks did not expose emitterEventNames. Falling back to basic listener validation.',
+        );
+        return null;
+      }
+
+      const normalized = events.filter(
+        (eventName) => typeof eventName === "string" && eventName.trim(),
+      );
+      if (normalized.length === 0) {
+        warning(
+          'manifest["ubiquity:listeners"]: canonical webhook event list is empty. Falling back to basic listener validation.',
+        );
+        return null;
+      }
+
+      return new Set(normalized);
+    } catch (error) {
+      warning(
+        `manifest["ubiquity:listeners"]: could not load canonical webhook events (${error.message || String(error)}). Falling back to basic listener validation.`,
+      );
+      return null;
+    }
+  })();
+
+  return canonicalWebhookEventsPromise;
+}
+
+/**
  * Normalizes a skipBotEvents input value to a boolean.
  *
  * Accepts booleans directly and string values "true"/"false" (case-insensitive).
@@ -104,10 +149,14 @@ function parseExcludedSupportedEvents(value) {
     return [];
   }
 
-  return [...new Set(value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean))];
+  return [
+    ...new Set(
+      value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 /**
@@ -292,7 +341,8 @@ function convertTypeBoxCommandSchema(commandSchema, existingCommands = {}) {
     typeof commandSchema.properties === "object" &&
     commandSchema.properties !== null &&
     !Array.isArray(commandSchema.properties);
-  const variants = unionVariants || (looksLikeSingleVariant ? [commandSchema] : null);
+  const variants =
+    unionVariants || (looksLikeSingleVariant ? [commandSchema] : null);
 
   if (!variants || variants.length === 0) {
     return {
@@ -400,18 +450,48 @@ function convertTypeBoxCommandSchema(commandSchema, existingCommands = {}) {
 
 /**
  * Validates that listeners is a well-formed listeners array.
- * Returns an error string if invalid, or null if valid.
+ *
+ * @param {unknown} listeners
+ * @param {{ knownWebhookEvents?: Set<string> | string[] | null }} [options]
+ * @returns {{ error: string | null, unknownEvents: string[] }}
  */
-function validateListeners(listeners) {
+function validateListeners(listeners, options = {}) {
   if (!Array.isArray(listeners)) {
-    return "listeners must be an array of webhook event strings";
+    return {
+      error: "listeners must be an array of webhook event strings",
+      unknownEvents: [],
+    };
   }
   for (const listener of listeners) {
-    if (typeof listener !== "string" || !listener.includes(".")) {
-      return `Listener "${listener}" does not look like a valid webhook event (expected format: "event.action")`;
+    if (typeof listener !== "string" || !listener.trim()) {
+      return {
+        error: `Listener "${listener}" must be a non-empty string`,
+        unknownEvents: [],
+      };
     }
   }
-  return null;
+
+  const knownWebhookEventsInput = options.knownWebhookEvents;
+  if (!knownWebhookEventsInput) {
+    return { error: null, unknownEvents: [] };
+  }
+
+  const knownWebhookEvents =
+    knownWebhookEventsInput instanceof Set
+      ? knownWebhookEventsInput
+      : new Set(knownWebhookEventsInput);
+  if (knownWebhookEvents.size === 0) {
+    return { error: null, unknownEvents: [] };
+  }
+
+  const unknownEvents = [];
+  for (const listener of listeners) {
+    if (!knownWebhookEvents.has(listener)) {
+      unknownEvents.push(listener);
+    }
+  }
+
+  return { error: null, unknownEvents: [...new Set(unknownEvents)] };
 }
 
 /**
@@ -454,6 +534,7 @@ function orderManifestFields(manifest) {
  * @param {string[]|null} [options.supportedEvents]
  * @param {boolean|string} [options.skipBotEvents]
  * @param {boolean} [options.allowMissingCommandSchema]
+ * @param {Set<string>|string[]|null} [options.knownWebhookEvents]
  * @returns {{ manifest: object, warnings: string[] }}
  */
 function buildManifest(
@@ -518,22 +599,30 @@ function buildManifest(
     }
   } else if (!options.allowMissingCommandSchema) {
     warnings.push(
-      'manifest.commands: no command schema found from entrypoint metadata. Field will not be auto-generated.',
+      "manifest.commands: no command schema found from entrypoint metadata. Field will not be auto-generated.",
     );
   }
 
   const supportedEvents = options.supportedEvents;
   if (supportedEvents !== undefined && supportedEvents !== null) {
-    const validationError = validateListeners(supportedEvents);
-    if (validationError) {
+    const listenerValidation = validateListeners(supportedEvents, {
+      knownWebhookEvents: options.knownWebhookEvents,
+    });
+    if (listenerValidation.error) {
       warnings.push(
-        `manifest["ubiquity:listeners"]: supported events found but invalid: ${validationError}. Skipping.`,
+        `manifest["ubiquity:listeners"]: supported events found but invalid: ${listenerValidation.error}. Skipping.`,
       );
     } else {
       manifest["ubiquity:listeners"] = supportedEvents;
-      console.log(
-        'manifest["ubiquity:listeners"]: derived from entrypoint generic type.',
-      );
+      if (listenerValidation.unknownEvents.length > 0) {
+        warnings.push(
+          `manifest["ubiquity:listeners"]: supported events include unknown webhook event(s): ${listenerValidation.unknownEvents.join(", ")}. Preserving values.`,
+        );
+      } else {
+        console.log(
+          'manifest["ubiquity:listeners"]: derived from entrypoint generic type.',
+        );
+      }
     }
   } else {
     warnings.push(
@@ -555,7 +644,7 @@ function buildManifest(
     );
   } else {
     warnings.push(
-      'manifest.configuration: no settings schema found from entrypoint metadata. Configuration will not be auto-generated.',
+      "manifest.configuration: no settings schema found from entrypoint metadata. Configuration will not be auto-generated.",
     );
   }
 
@@ -617,7 +706,10 @@ function findMatchingDelimiter(input, startIndex, openChar, closeChar) {
 
     if (char === "/" && next === "*") {
       i += 2;
-      while (i < input.length - 1 && !(input[i] === "*" && input[i + 1] === "/")) {
+      while (
+        i < input.length - 1 &&
+        !(input[i] === "*" && input[i + 1] === "/")
+      ) {
         i++;
       }
       i++;
@@ -669,7 +761,10 @@ function splitTopLevel(input, delimiter = ",", options = {}) {
 
     if (char === "/" && next === "*") {
       i += 2;
-      while (i < input.length - 1 && !(input[i] === "*" && input[i + 1] === "/")) {
+      while (
+        i < input.length - 1 &&
+        !(input[i] === "*" && input[i + 1] === "/")
+      ) {
         i++;
       }
       i++;
@@ -722,7 +817,10 @@ function findTopLevelChar(input, targetChar) {
 
     if (char === "/" && next === "*") {
       i += 2;
-      while (i < input.length - 1 && !(input[i] === "*" && input[i + 1] === "/")) {
+      while (
+        i < input.length - 1 &&
+        !(input[i] === "*" && input[i + 1] === "/")
+      ) {
         i++;
       }
       i++;
@@ -899,7 +997,9 @@ function parseImports(content) {
 
       for (const entry of entries) {
         const withoutType = entry.replace(/^type\s+/, "").trim();
-        const asMatch = withoutType.match(/^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/);
+        const asMatch = withoutType.match(
+          /^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/,
+        );
         if (asMatch) {
           imports.named.set(asMatch[2], {
             importedName: asMatch[1],
@@ -938,7 +1038,9 @@ function parseReexports(content) {
 
     for (const entry of entries) {
       const withoutType = entry.replace(/^type\s+/, "").trim();
-      const asMatch = withoutType.match(/^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/);
+      const asMatch = withoutType.match(
+        /^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/,
+      );
       if (asMatch) {
         reexports.named.set(asMatch[2], {
           importedName: asMatch[1],
@@ -1065,7 +1167,10 @@ function skipWhitespaceAndComments(input, startIndex) {
 
     if (char === "/" && next === "*") {
       i += 2;
-      while (i < input.length - 1 && !(input[i] === "*" && input[i + 1] === "/")) {
+      while (
+        i < input.length - 1 &&
+        !(input[i] === "*" && input[i + 1] === "/")
+      ) {
         i++;
       }
       i += 2;
@@ -1108,7 +1213,10 @@ function findTypeAliasTerminator(input, startIndex) {
 
     if (char === "/" && next === "*") {
       i += 2;
-      while (i < input.length - 1 && !(input[i] === "*" && input[i + 1] === "/")) {
+      while (
+        i < input.length - 1 &&
+        !(input[i] === "*" && input[i + 1] === "/")
+      ) {
         i++;
       }
       i++;
@@ -1144,7 +1252,10 @@ function findTypeAliasTerminator(input, startIndex) {
           return input.length;
         }
 
-        if (input[nextIndex] === "}" || isTypeDeclarationBoundary(input, nextIndex)) {
+        if (
+          input[nextIndex] === "}" ||
+          isTypeDeclarationBoundary(input, nextIndex)
+        ) {
           return i;
         }
       }
@@ -1208,7 +1319,13 @@ function resolveTsModulePath(fromFile, specifier) {
   return null;
 }
 
-async function resolveTypeAlias(aliasName, filePath, projectRoot, cache, seen = new Set()) {
+async function resolveTypeAlias(
+  aliasName,
+  filePath,
+  projectRoot,
+  cache,
+  seen = new Set(),
+) {
   const key = `${filePath}::${aliasName}`;
   if (seen.has(key)) {
     throw new Error(`Circular type alias resolution detected for ${aliasName}`);
@@ -1265,7 +1382,13 @@ async function resolveTypeAlias(aliasName, filePath, projectRoot, cache, seen = 
     if (!modulePath) continue;
 
     try {
-      return await resolveTypeAlias(aliasName, modulePath, projectRoot, cache, seen);
+      return await resolveTypeAlias(
+        aliasName,
+        modulePath,
+        projectRoot,
+        cache,
+        seen,
+      );
     } catch {
       // continue searching other star re-exports
     }
@@ -1350,7 +1473,9 @@ async function resolveRuntimeReferenceFromIdentifier(
     /^([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)$/,
   );
   if (namespaceMemberMatch) {
-    const namespaceSource = parsed.imports.namespace.get(namespaceMemberMatch[1]);
+    const namespaceSource = parsed.imports.namespace.get(
+      namespaceMemberMatch[1],
+    );
     if (!namespaceSource) {
       throw new Error(
         `Namespace import "${namespaceMemberMatch[1]}" not found in ${path.relative(projectRoot, filePath)}`,
@@ -1464,8 +1589,12 @@ async function findEntrypointCallsite(projectRoot) {
 
   for (const filePath of tsFiles) {
     const content = await fs.readFile(filePath, "utf8");
-    pluginCallsites.push(...findCallsitesInSource(filePath, content, "createPlugin"));
-    actionCallsites.push(...findCallsitesInSource(filePath, content, "createActionsPlugin"));
+    pluginCallsites.push(
+      ...findCallsitesInSource(filePath, content, "createPlugin"),
+    );
+    actionCallsites.push(
+      ...findCallsitesInSource(filePath, content, "createActionsPlugin"),
+    );
   }
 
   if (pluginCallsites.length > 1) {
@@ -1564,7 +1693,8 @@ console.log(${JSON.stringify(DENO_OUTPUT_PREFIX)} + JSON.stringify(out));
       loadErrors.push({ runtime: "node-cjs", error: cjsError });
       const details = loadErrors
         .map(({ runtime, error }) => {
-          const message = error && error.message ? error.message : String(error);
+          const message =
+            error && error.message ? error.message : String(error);
           return `[${runtime}] ${message}`;
         })
         .join("\n");
@@ -1578,7 +1708,9 @@ console.log(${JSON.stringify(DENO_OUTPUT_PREFIX)} + JSON.stringify(out));
 }
 
 async function loadRuntimeReferenceValue(reference, projectRoot) {
-  const loaded = await loadPluginModule(reference.modulePath, [reference.exportName]);
+  const loaded = await loadPluginModule(reference.modulePath, [
+    reference.exportName,
+  ]);
   const value = loaded[reference.exportName];
   if (value === undefined) {
     throw new Error(
@@ -1661,7 +1793,10 @@ async function extractManifestMetadataFromEntrypoint(
       projectRoot,
       sourceCache,
     );
-    commandSchema = await loadRuntimeReferenceValue(commandSchemaRef, projectRoot);
+    commandSchema = await loadRuntimeReferenceValue(
+      commandSchemaRef,
+      projectRoot,
+    );
   } else {
     throw new Error(
       `TCommand generic "${commandTypeExpr}" in ${path.relative(projectRoot, entrypoint.filePath)} must be "null" or a traceable type alias.`,
@@ -1715,7 +1850,10 @@ async function extractManifestMetadataFromEntrypoint(
  * @param {string} [typeAliasName]
  * @returns {Promise<string[]|null>}
  */
-async function extractSupportedEvents(projectRoot, typeAliasName = "SupportedEvents") {
+async function extractSupportedEvents(
+  projectRoot,
+  typeAliasName = "SupportedEvents",
+) {
   const srcDir = path.join(projectRoot, "src");
   if (!fsSync.existsSync(srcDir)) {
     return null;
@@ -1754,11 +1892,10 @@ async function extractSupportedEvents(projectRoot, typeAliasName = "SupportedEve
 async function formatManifestWithPrettier(manifestPath, cwd) {
   const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
   try {
-    await execFileAsync(
-      npxCommand,
-      ["prettier", "--write", manifestPath],
-      { cwd, maxBuffer: 20 * 1024 * 1024 },
-    );
+    await execFileAsync(npxCommand, ["prettier", "--write", manifestPath], {
+      cwd,
+      maxBuffer: 20 * 1024 * 1024,
+    });
     return true;
   } catch (error) {
     warning(
@@ -1818,6 +1955,7 @@ function resolveConfig() {
  */
 async function main() {
   const config = resolveConfig();
+  const knownWebhookEvents = await loadCanonicalWebhookEvents();
 
   let metadata;
   try {
@@ -1864,7 +2002,9 @@ async function main() {
       await fs.readFile(config.manifestPath, "utf8"),
     );
   } catch {
-    console.log(`No existing manifest at ${config.manifestPath}, starting fresh.`);
+    console.log(
+      `No existing manifest at ${config.manifestPath}, starting fresh.`,
+    );
   }
 
   const { manifest, warnings: buildWarnings } = buildManifest(
@@ -1876,6 +2016,7 @@ async function main() {
       supportedEvents: metadata.supportedEvents,
       skipBotEvents: config.skipBotEvents,
       allowMissingCommandSchema: metadata.allowMissingCommandSchema,
+      knownWebhookEvents,
     },
   );
 
@@ -1901,6 +2042,7 @@ module.exports = {
   pickManifestExports,
   parseDenoLoaderOutput,
   ensureNodeDenoShim,
+  loadCanonicalWebhookEvents,
   normalizeSkipBotEvents,
   parseExcludedSupportedEvents,
   findMatchingDelimiter,
