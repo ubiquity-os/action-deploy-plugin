@@ -181,7 +181,7 @@ describe("buildManifest", () => {
     assert.equal(warnings.length, 0);
   });
 
-  it("accepts canonical dotless listeners", () => {
+  it("accepts dotless listeners", () => {
     const pluginModule = {
       pluginSettingsSchema: {
         type: "object",
@@ -204,7 +204,6 @@ describe("buildManifest", () => {
       REPO_INFO,
       {
         supportedEvents: ["push"],
-        knownWebhookEvents: new Set(["push", "issue_comment.created"]),
       },
     );
 
@@ -216,7 +215,7 @@ describe("buildManifest", () => {
     );
   });
 
-  it("warns but preserves unknown listeners when canonical list is available", () => {
+  it("preserves listeners without validating webhook names", () => {
     const pluginModule = {
       pluginSettingsSchema: {
         type: "object",
@@ -239,7 +238,6 @@ describe("buildManifest", () => {
       REPO_INFO,
       {
         supportedEvents: ["push", "future_event.created"],
-        knownWebhookEvents: new Set(["push"]),
       },
     );
 
@@ -248,13 +246,8 @@ describe("buildManifest", () => {
       "future_event.created",
     ]);
     assert.ok(
-      warnings.some((warning) =>
-        warning.includes("unknown webhook event(s): future_event.created"),
-      ),
-    );
-    assert.ok(
       !warnings.some((warning) =>
-        warning.includes("supported events found but invalid"),
+        warning.includes('manifest["ubiquity:listeners"]'),
       ),
     );
   });
@@ -420,24 +413,11 @@ describe("validation helpers", () => {
     });
   });
 
-  it("validateListeners validates listener values and canonical unknowns", () => {
-    assert.deepEqual(validateListeners(["issue_comment.created"]), {
-      error: null,
-      unknownEvents: [],
-    });
-    assert.ok(
-      validateListeners("issue_comment.created").error.includes("array"),
-    );
-    assert.ok(validateListeners([""]).error.includes("non-empty string"));
-    assert.deepEqual(
-      validateListeners(["push", "future_event.created"], {
-        knownWebhookEvents: new Set(["push"]),
-      }),
-      {
-        error: null,
-        unknownEvents: ["future_event.created"],
-      },
-    );
+  it("validateListeners validates listener structure only", () => {
+    assert.equal(validateListeners(["issue_comment.created"]), null);
+    assert.equal(validateListeners(["push", "future_event.created"]), null);
+    assert.ok(validateListeners("issue_comment.created").includes("array"));
+    assert.ok(validateListeners([""]).includes("non-empty string"));
   });
 
   it("normalizes skipBotEvents values", () => {
