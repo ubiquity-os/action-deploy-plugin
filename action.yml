@@ -149,6 +149,7 @@ runs:
       if: ${{ inputs.action == 'publish' && steps.resolve_refs.outputs.should_skip != 'true' }}
       shell: bash
       run: |
+        # Keep project install-time generators (if any) available for builds.
         bun install --frozen-lockfile
 
     - name: Prepare manifest configuration JSON
@@ -162,6 +163,7 @@ runs:
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_REF_NAME: ${{ steps.resolve_refs.outputs.source_ref }}
       run: |
+        echo "Resolved SKIP_BOT_EVENTS=${SKIP_BOT_EVENTS}"
         node ${{ github.action_path }}/.github/scripts/update-manifest.js
 
     - name: Build project
@@ -176,11 +178,10 @@ runs:
           echo "Compiling plugin types (single file)..."
           bun x esbuild ${{ inputs.schemaPath }} --bundle --platform=node --format=esm --target=node20 --minify --outfile=plugin/index.js
         else
-          bun add -DE @vercel/ncc
           echo "Compiling plugin..."
-          bun ncc build ${{ inputs.pluginEntry }} --external "./tests" -m ${{ inputs.sourcemap == 'true' && '-s' || '' }} -o dist/plugin
+          bun x @vercel/ncc build ${{ inputs.pluginEntry }} --external "./tests" -m ${{ inputs.sourcemap == 'true' && '-s' || '' }} -o dist/plugin
           echo "Compiling plugin types..."
-          bun ncc build ${{ inputs.schemaPath }} --external "./tests" -m -o plugin
+          bun x @vercel/ncc build ${{ inputs.schemaPath }} --external "./tests" -m -o plugin
         fi
 
     - name: Replace __dirname with import.meta.dirname
@@ -247,6 +248,14 @@ runs:
         SOURCE_REF: ${{ steps.resolve_refs.outputs.source_ref }}
         ARTIFACT_PREFIX: ${{ steps.resolve_refs.outputs.artifact_prefix }}
       run: |
+        # Enforce final manifest values after all build-time lifecycle scripts.
+        echo "Re-applying manifest before publish with SKIP_BOT_EVENTS=${{ inputs.skipBotEvents }}"
+        SKIP_BOT_EVENTS="${{ inputs.skipBotEvents }}" \
+        EXCLUDE_SUPPORTED_EVENTS="${{ inputs.excludeSupportedEvents }}" \
+        GITHUB_WORKSPACE="${{ github.workspace }}" \
+        GITHUB_REPOSITORY="${{ github.repository }}" \
+        GITHUB_REF_NAME="${{ steps.resolve_refs.outputs.source_ref }}" \
+        node ${{ github.action_path }}/.github/scripts/update-manifest.js
         bun ${{ github.action_path }}/.github/scripts/push-changes.js
 
     - name: Delete artifact branch

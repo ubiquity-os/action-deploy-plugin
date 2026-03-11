@@ -28,7 +28,10 @@ Builds a Ubiquity plugin, generates `manifest.json` metadata from source TypeScr
 - Generated files are committed to the artifact branch only:
   - `manifest.json` at branch root
   - build outputs under `dist/**`
-- The artifact branch tree is reduced to generated outputs only (`manifest.json` and `dist/**`).
+- Optional root metadata if present in source:
+  - `action.yml`
+  - `.github/workflows/compute.yml`
+- The artifact branch tree is reduced to generated outputs and required runtime metadata.
 - Source branches no longer receive generated `dist/**` or generated `manifest.json` commits.
 - In CI publish runs, manifest generation executes before build so projects importing `manifest.json` can compile even when the file is not tracked on the source branch.
 
