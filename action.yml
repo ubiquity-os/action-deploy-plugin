@@ -232,12 +232,11 @@ runs:
             printf '{"type":"module"}\n' > dist/plugin/package.json
           fi
           cp "${{ github.action_path }}/.github/scripts/reassembly-esm.js" dist/index.js
-          cat > dist/index.cjs <<'EOF'
-          import("./index.js").catch((error) => {
-            console.error("Failed to load dist/index.js from CJS bridge:", error);
-            process.exit(1);
-          });
-          EOF
+          printf '%s\n' \
+            'import("./index.js").catch((error) => {' \
+            '  console.error("Failed to load dist/index.js from CJS bridge:", error);' \
+            '  process.exit(1);' \
+            '});' > dist/index.cjs
           cp dist/plugin/package.json dist/package.json
         else
           cp "${{ github.action_path }}/.github/scripts/reassembly-cjs.js" dist/index.js
