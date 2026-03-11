@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.3.3](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.3.2...v1.3.3) (2026-03-11)
+
+
+### Bug Fixes
+
+* **artifact:** include action metadata in dist branch payload ([5536f46](https://github.com/ubiquity-os/action-deploy-plugin/commit/5536f46f2e52ebffed2a17587da5891b51cde569))
+* **artifact:** include compute workflow in dist payload ([21d41e4](https://github.com/ubiquity-os/action-deploy-plugin/commit/21d41e4b03df78204810e05af846e8c6c6707c98))
+* **artifact:** include compute workflow in dist payload ([3ac390b](https://github.com/ubiquity-os/action-deploy-plugin/commit/3ac390b10610e51946c1bad92aa775b1c7456c51))
+* **artifact:** include package and lock files in dist payload ([f8fe978](https://github.com/ubiquity-os/action-deploy-plugin/commit/f8fe97894eee26e02d39209e619584bc43fc7caf))
+* **artifact:** include package and lock files in dist payload ([987beaa](https://github.com/ubiquity-os/action-deploy-plugin/commit/987beaabe2ede2a60ead18cc4e9814e6fbafb695))
+* **artifact:** publish dist index.cjs entrypoint ([fe114c0](https://github.com/ubiquity-os/action-deploy-plugin/commit/fe114c037749c9cf925fa713b56ac8ad35f04eaf))
+* **ci:** avoid heredoc parsing in CJS bridge generation ([5073aaf](https://github.com/ubiquity-os/action-deploy-plugin/commit/5073aafb31a4635ad6e95d3b034611ba7b152f16))
+* **ci:** preserve skipBotEvents during publish ([f9906e5](https://github.com/ubiquity-os/action-deploy-plugin/commit/f9906e5c9ea6eef74ea3273bafcfc967d633a0e2))
+* **ci:** reapply manifest before artifact publish ([0412531](https://github.com/ubiquity-os/action-deploy-plugin/commit/0412531be761f384f1328e8a0a8f4ea332299a06))
+* **ci:** reapply manifest before artifact publish ([75fc321](https://github.com/ubiquity-os/action-deploy-plugin/commit/75fc3213ad57609f79d536042c07786f5fca79ab))
+* **ci:** stabilize manifest publishing in composite action ([d394426](https://github.com/ubiquity-os/action-deploy-plugin/commit/d394426ac55907c74e0e61943103a978e3595a42))
+* **ci:** stabilize manifest publishing in composite action ([d546c0b](https://github.com/ubiquity-os/action-deploy-plugin/commit/d546c0b5a0bc1e98996788bd2277c4cc3600e6a6))
+* finalize manifest after build to preserve skipBotEvents ([04f39f3](https://github.com/ubiquity-os/action-deploy-plugin/commit/04f39f3be66cb242be9c5145716daab80b4be834))
+* include action.yml in artifact branch payload ([9d3c21c](https://github.com/ubiquity-os/action-deploy-plugin/commit/9d3c21ce64407f0d4cddb6a6d49857fff3e6dda5))
+* make artifact branch delete idempotent when branch is missing ([effd880](https://github.com/ubiquity-os/action-deploy-plugin/commit/effd880fb48994e0049d53362fa13cb631ec6b17))
+* propagate skipBotEvents to install/build env ([c40abcd](https://github.com/ubiquity-os/action-deploy-plugin/commit/c40abcd771bc22e197d55820d90cc9f6587ef305))
+* skip dist and tag refs in composite action ([#38](https://github.com/ubiquity-os/action-deploy-plugin/issues/38)) ([559de1c](https://github.com/ubiquity-os/action-deploy-plugin/commit/559de1cab0630ca9f45cf3847715153fdba56268))
+* warn instead of failing when artifact branch is missing ([8066946](https://github.com/ubiquity-os/action-deploy-plugin/commit/8066946a5938b0149ee1fa300861d7fa919f824f))
+
 ## [1.3.2](https://github.com/ubiquity-os/action-deploy-plugin/compare/v1.3.1...v1.3.2) (2026-03-05)
 
 
